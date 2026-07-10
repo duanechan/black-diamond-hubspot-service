@@ -15,12 +15,10 @@ class EmptyVariableError(ValueError):
     def __init__(self):
         super().__init__("Value cannot be empty")
 
-
 class PlaceholderVariableError(ValueError):
     """Raised when variable is a placeholder."""
     def __init__(self):
            super().__init__("Placeholder value detected")
-
 
 class MinimumLengthNotMetError(ValueError):
     """Raised when variable length does not meet a minimum length."""
@@ -28,7 +26,6 @@ class MinimumLengthNotMetError(ValueError):
         super().__init__(
             f"value must be at least {MINIMUM_KEY_LENGTH} characters"
         )
-
 
 class Settings(BaseSettings):
     """
@@ -176,7 +173,6 @@ class Settings(BaseSettings):
 
         return v
 
-
 def format_group(
     title: str,
     fix: str,
@@ -190,9 +186,15 @@ def format_group(
         "-" * 80,
     ]
 
-
 def validate_settings() -> Settings:
-    """Creates a validated `Settings` instance. Exits with code `1` when validation errors are present."""
+    """Loads and validates the application settings.
+
+    If validation fails, logs a detailed summary of the validation errors and
+    terminates the process with exit code `1`.
+
+    Returns:
+        The validated application settings.
+    """
     try:
         return Settings() # pyright: ignore[reportCallIssue]
     except ValidationError as ve:

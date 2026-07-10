@@ -1,7 +1,6 @@
 from app import config
 from app.logger import logger
 
-
 def create_app():
     settings = config.validate_settings()
     logger.setLevel(settings.LOG_LEVEL)
