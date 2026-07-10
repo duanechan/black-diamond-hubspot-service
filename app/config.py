@@ -1,15 +1,34 @@
-
-import logging
 import sys
 
 from pydantic import ValidationError, field_validator
 from pydantic.types import SecretStr
+from pydantic_core import ErrorDetails
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.logger import logger
 
 MINIMUM_KEY_LENGTH = 32
 PLACEHOLDER_PREFIX = "REPLACE_WITH"
 
-logger = logging.getLogger(__name__)
+class EmptyVariableError(ValueError):
+    """Raised when variable is empty."""
+    def __init__(self):
+        super().__init__("Value cannot be empty")
+
+
+class PlaceholderVariableError(ValueError):
+    """Raised when variable is a placeholder."""
+    def __init__(self):
+           super().__init__("Placeholder value detected")
+
+
+class MinimumLengthNotMetError(ValueError):
+    """Raised when variable length does not meet a minimum length."""
+    def __init__(self):
+        super().__init__(
+            f"value must be at least {MINIMUM_KEY_LENGTH} characters"
+        )
+
 
 class Settings(BaseSettings):
     """
@@ -120,7 +139,7 @@ class Settings(BaseSettings):
         trimmed = v.strip()
 
         if trimmed == "":
-            raise ValueError("Must be non-empty")
+            raise EmptyVariableError
 
         return trimmed
 
@@ -134,10 +153,10 @@ class Settings(BaseSettings):
         trimmed = v.get_secret_value().strip()
 
         if trimmed == "":
-            raise ValueError("Must be non-empty")
+            raise EmptyVariableError
 
         if trimmed.startswith(PLACEHOLDER_PREFIX):
-            raise ValueError("Must not be a placeholder")
+            raise PlaceholderVariableError
 
         return v
 
@@ -147,23 +166,68 @@ class Settings(BaseSettings):
         trimmed = v.get_secret_value().strip()
 
         if trimmed == "":
-            raise ValueError("Must be non-empty")
+            raise EmptyVariableError
 
         if trimmed.startswith(PLACEHOLDER_PREFIX):
-            raise ValueError("Must not be a placeholder")
+            raise PlaceholderVariableError
 
         if len(trimmed) < MINIMUM_KEY_LENGTH:
-            raise ValueError(f"Must have a minimum of {MINIMUM_KEY_LENGTH} characters")
+            raise MinimumLengthNotMetError
 
         return v
 
+
+def format_group(
+    title: str,
+    fix: str,
+    errors: list[ErrorDetails],
+) -> list[str]:
+    return [
+        "-" * 80,
+        f" Error: {title} ({len(errors)})",
+        f" Fix: {fix}",
+        *[f"  * {e['loc'][0]}" for e in errors],
+        "-" * 80,
+    ]
+
+
 def validate_settings() -> Settings:
+    """Creates a validated `Settings` instance. Exits with code `1` when validation errors are present."""
     try:
-        return Settings()   # pyright: ignore[reportCallIssue]
+        return Settings() # pyright: ignore[reportCallIssue]
     except ValidationError as ve:
         errors = ve.errors()
+        empty_var_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), EmptyVariableError)]
+        placeholder_var_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), PlaceholderVariableError)]
+        min_length_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), MinimumLengthNotMetError)]
 
-        for e in errors:
-            print(e)
+        lines = [f"{len(errors)} validation errors found:"]
+        if empty_var_errors:
+            lines.extend(
+                format_group(
+                    "EmptyVariableError",
+                    "Set the variable to a non-empty value.",
+                    empty_var_errors,
+                )
+            )
 
+        if placeholder_var_errors:
+            lines.extend(
+                format_group(
+                    "PlaceholderVariableError",
+                    "Replace the placeholder value with a real secret.",
+                    placeholder_var_errors,
+                )
+            )
+
+        if min_length_errors:
+            lines.extend(
+                format_group(
+                    "MinimumLengthNotMetError",
+                    f"Use a value at least {MINIMUM_KEY_LENGTH} characters long.",
+                    min_length_errors,
+                )
+            )
+
+        logger.error("\n".join(lines))
         sys.exit(1)
