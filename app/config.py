@@ -203,7 +203,7 @@ def validate_settings() -> Settings:
         placeholder_var_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), PlaceholderVariableError)]
         min_length_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), MinimumLengthNotMetError)]
 
-        lines = [f"{len(errors)} validation errors found:"]
+        lines = [f"{len(errors)} validation error(s) found:"]
         if empty_var_errors:
             lines.extend(
                 format_group(
