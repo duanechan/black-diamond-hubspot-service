@@ -24,5 +24,4 @@ handler.setFormatter(ColoredFormatter(
 ))
 
 logger = logging.getLogger(__name__)
-logger.setLevel("INFO")
 logger.addHandler(handler)
