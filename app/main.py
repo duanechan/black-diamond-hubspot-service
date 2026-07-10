@@ -1,0 +1,9 @@
+from app.config import Settings
+
+
+def main():
+    print("Hello from hubspot-service!")
+
+
+if __name__ == "__main__":
+    main()

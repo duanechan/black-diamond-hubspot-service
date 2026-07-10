@@ -1,5 +1,5 @@
 [project]
-name = "hubspot-service"
+name = "black-diamond-hubspot-service"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"

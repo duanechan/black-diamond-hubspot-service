@@ -1,5 +1,5 @@
 def main():
-    print("Hello from hubspot-service!")
+    print("Hello from black-diamond-hubspot-service!")
 
 
 if __name__ == "__main__":
