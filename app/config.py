@@ -11,6 +11,9 @@ MINIMUM_KEY_LENGTH = 32
 PLACEHOLDER_PREFIX = "REPLACE_WITH"
 LOG_LEVELS = ["debug", "info", "warning", "error", "critical"]
 
+class VariableError(ValueError):
+    """Fallback error"""
+
 class EmptyVariableError(ValueError):
     """Raised when variable is empty."""
     def __init__(self):
@@ -33,6 +36,13 @@ class InvalidLogLevelError(ValueError):
     def __init__(self):
         super().__init__("Invalid log level")
 
+ERROR_REGISTRY = {
+    VariableError: ("VariableError", "Refer to the technical documentation for guidance."),
+    EmptyVariableError: ("EmptyVariableError", "Set the variable to a non-empty value."),
+    PlaceholderVariableError: ("PlaceholderVariableError", "Replace the placeholder value with a real secret."),
+    MinimumLengthNotMetError: ("MinimumLengthNotMetError", f"Use a value at least {MINIMUM_KEY_LENGTH} characters long."),
+    InvalidLogLevelError: ("InvalidLogLevelError", f"Use one of: {', '.join(LOG_LEVELS)}")
+}
 
 class Settings(BaseSettings):
     """
@@ -201,6 +211,19 @@ def format_group(
         "-" * 80,
     ]
 
+def build_errors(details: list[ErrorDetails]) -> dict[type[ValueError], list[ErrorDetails]]:
+    errors: dict[type[ValueError], list[ErrorDetails]] = {}
+
+    for e in details:
+        error = e.get("ctx", {}).get("error")
+        error_type = type(error)
+        if error_type not in ERROR_REGISTRY:
+            errors.setdefault(VariableError, []).append(e)
+        else:
+            errors.setdefault(error_type, []).append(e)  # pyright: ignore[reportArgumentType]
+
+    return errors
+
 def validate_settings() -> Settings:
     """Loads and validates the application settings.
 
@@ -211,40 +234,15 @@ def validate_settings() -> Settings:
         The validated application settings.
     """
     try:
-        return Settings() # pyright: ignore[reportCallIssue]
+        return Settings()  # pyright: ignore[reportCallIssue]
     except ValidationError as ve:
         errors = ve.errors()
-        empty_var_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), EmptyVariableError)]
-        placeholder_var_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), PlaceholderVariableError)]
-        min_length_errors = [e for e in errors if isinstance(e.get("ctx", {}).get("error"), MinimumLengthNotMetError)]
+        error_details = build_errors(errors)
+        lines = [f"{len(errors)} Validation Error(s) found:"]
 
-        lines = [f"{len(errors)} validation error(s) found:"]
-        if empty_var_errors:
-            lines.extend(
-                format_group(
-                    "EmptyVariableError",
-                    "Set the variable to a non-empty value.",
-                    empty_var_errors,
-                )
-            )
-
-        if placeholder_var_errors:
-            lines.extend(
-                format_group(
-                    "PlaceholderVariableError",
-                    "Replace the placeholder value with a real secret.",
-                    placeholder_var_errors,
-                )
-            )
-
-        if min_length_errors:
-            lines.extend(
-                format_group(
-                    "MinimumLengthNotMetError",
-                    f"Use a value at least {MINIMUM_KEY_LENGTH} characters long.",
-                    min_length_errors,
-                )
-            )
+        for (error_type, details) in error_details.items():
+            title, fix = ERROR_REGISTRY[error_type]
+            lines.extend(format_group(title, fix, details))
 
         logger.error("\n".join(lines))
         sys.exit(1)
