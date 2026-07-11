@@ -15,6 +15,7 @@ text_formatter = ColoredFormatter(
         "INFO": "bold_white",
         "WARNING": "bold_light_yellow",
         "ERROR": "bold_light_red",
+        "CRITICAL": "bold_red",
     },
     secondary_log_colors={
         "asctime": {
@@ -22,6 +23,7 @@ text_formatter = ColoredFormatter(
             "INFO": "light_black",
             "WARNING": "light_black",
             "ERROR": "light_black",
+            "CRITICAL": "light_black",
         }
     },
 )

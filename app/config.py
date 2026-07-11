@@ -9,6 +9,7 @@ from app.logger import logger
 
 MINIMUM_KEY_LENGTH = 32
 PLACEHOLDER_PREFIX = "REPLACE_WITH"
+LOG_LEVELS = ["debug", "info", "warning", "error", "critical"]
 
 class EmptyVariableError(ValueError):
     """Raised when variable is empty."""
@@ -26,6 +27,12 @@ class MinimumLengthNotMetError(ValueError):
         super().__init__(
             f"value must be at least {MINIMUM_KEY_LENGTH} characters"
         )
+
+class InvalidLogLevelError(ValueError):
+    """Raised when log level is invalid."""
+    def __init__(self):
+        super().__init__("Invalid log level")
+
 
 class Settings(BaseSettings):
     """
@@ -122,7 +129,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "APP_VERSION", "APP_TITLE", "FLASK_ENV", "HOST", "ENVIRONMENT",
-        "LOG_LEVEL", "LOG_FORMAT",
+        "LOG_FORMAT",
         "DB_HOST", "DB_NAME", "DB_USER", "DB_SCHEMA",
         "HUBSPOT_PORTAL_ID", "HUBSPOT_BASE_URL", "HUBSPOT_API_VERSION",
         "MINIO_ENDPOINT", "MINIO_BUCKET",
@@ -172,6 +179,14 @@ class Settings(BaseSettings):
             raise MinimumLengthNotMetError
 
         return v
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def ensure_valid_log_level(cls, level: str) -> str:
+        if level.lower() not in LOG_LEVELS:
+            raise InvalidLogLevelError
+
+        return level
 
 def format_group(
     title: str,
