@@ -1,10 +1,10 @@
 from app import config
-from app.logger import json_formatter, text_formatter, handler, logger
+from app.logger import logger
+
 
 def create_app():
     settings = config.validate_settings()
     logger.setLevel(settings.LOG_LEVEL)
-    handler.setFormatter(json_formatter if settings.LOG_FORMAT == "json" else text_formatter)
 
     logger.info("Configuration loaded successfully.")
     logger.info("Environment: %s", settings.ENVIRONMENT.upper())

@@ -1,15 +1,14 @@
 import sys
+from typing import Any
 
 from pydantic import ValidationError, field_validator
 from pydantic.types import SecretStr
 from pydantic_core import ErrorDetails
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.logger import logger
+from app import constants
+from app.logger import is_json_logging, logger
 
-MINIMUM_KEY_LENGTH = 32
-PLACEHOLDER_PREFIX = "REPLACE_WITH"
-LOG_LEVELS = ["debug", "info", "warning", "error", "critical"]
 
 class VariableError(ValueError):
     """Fallback error"""
@@ -28,7 +27,7 @@ class MinimumLengthNotMetError(ValueError):
     """Raised when variable length does not meet a minimum length."""
     def __init__(self):
         super().__init__(
-            f"value must be at least {MINIMUM_KEY_LENGTH} characters"
+            f"value must be at least {constants.MINIMUM_KEY_LENGTH} characters"
         )
 
 class InvalidLogLevelError(ValueError):
@@ -40,8 +39,8 @@ ERROR_REGISTRY = {
     VariableError: ("VariableError", "Refer to the technical documentation for guidance."),
     EmptyVariableError: ("EmptyVariableError", "Set the variable to a non-empty value."),
     PlaceholderVariableError: ("PlaceholderVariableError", "Replace the placeholder value with a real secret."),
-    MinimumLengthNotMetError: ("MinimumLengthNotMetError", f"Use a value at least {MINIMUM_KEY_LENGTH} characters long."),
-    InvalidLogLevelError: ("InvalidLogLevelError", f"Use one of: {', '.join(LOG_LEVELS)}")
+    MinimumLengthNotMetError: ("MinimumLengthNotMetError", f"Use a value at least {constants.MINIMUM_KEY_LENGTH} characters long."),
+    InvalidLogLevelError: ("InvalidLogLevelError", f"Use one of: {', '.join(constants.LOG_LEVELS)}")
 }
 
 class Settings(BaseSettings):
@@ -169,7 +168,7 @@ class Settings(BaseSettings):
         if trimmed == "":
             raise EmptyVariableError
 
-        if trimmed.startswith(PLACEHOLDER_PREFIX):
+        if trimmed.startswith(constants.PLACEHOLDER_PREFIX):
             raise PlaceholderVariableError
 
         return v
@@ -182,10 +181,10 @@ class Settings(BaseSettings):
         if trimmed == "":
             raise EmptyVariableError
 
-        if trimmed.startswith(PLACEHOLDER_PREFIX):
+        if trimmed.startswith(constants.PLACEHOLDER_PREFIX):
             raise PlaceholderVariableError
 
-        if len(trimmed) < MINIMUM_KEY_LENGTH:
+        if len(trimmed) < constants.MINIMUM_KEY_LENGTH:
             raise MinimumLengthNotMetError
 
         return v
@@ -193,23 +192,38 @@ class Settings(BaseSettings):
     @field_validator("LOG_LEVEL")
     @classmethod
     def ensure_valid_log_level(cls, level: str) -> str:
-        if level.lower() not in LOG_LEVELS:
+        if level.lower() not in constants.LOG_LEVELS:
             raise InvalidLogLevelError
 
         return level
 
-def format_group(
-    title: str,
-    fix: str,
-    errors: list[ErrorDetails],
-) -> list[str]:
-    return [
-        "-" * 80,
-        f" Error: {title} ({len(errors)})",
-        f" Fix: {fix}",
-        *[f"  * {e['loc'][0]}" for e in errors],
-        "-" * 80,
-    ]
+def format_text(error_details: dict[type[ValueError], list[ErrorDetails]]) -> list[str]:
+    text_msg: list[str] = []
+
+    for (error_type, details) in error_details.items():
+        title, fix = ERROR_REGISTRY[error_type]
+        text_msg.append("-" * 80)
+        text_msg.append(f" Error: {title} ({len(details)})")
+        text_msg.append(f" Fix: {fix}")
+        text_msg.extend([f"  * {e['loc'][0]}" for e in details])
+        text_msg.append("-" * 80)
+        text_msg.append("")
+
+    return text_msg
+
+
+def format_json(error_details: dict[type[ValueError], list[ErrorDetails]]) -> list[dict[str, Any]]:
+    json_msg: list[dict[str, Any]] = []
+
+    for (error_type, details) in error_details.items():
+        title, fix = ERROR_REGISTRY[error_type]
+        json_msg.append({
+            "type": title,
+            "fix": fix,
+            "fields": [e["loc"][0] for e in details]
+        })
+
+    return json_msg
 
 def build_errors(details: list[ErrorDetails]) -> dict[type[ValueError], list[ErrorDetails]]:
     errors: dict[type[ValueError], list[ErrorDetails]] = {}
@@ -238,11 +252,18 @@ def validate_settings() -> Settings:
     except ValidationError as ve:
         errors = ve.errors()
         error_details = build_errors(errors)
-        lines = [f"{len(errors)} Validation Error(s) found:"]
 
-        for (error_type, details) in error_details.items():
-            title, fix = ERROR_REGISTRY[error_type]
-            lines.extend(format_group(title, fix, details))
+        if is_json_logging():
+            logger.error(
+                f"{len(errors)} validation error(s) found",
+                extra={"validation_errors": format_json(error_details)},
+            )
+        else:
+            logger.error(
+                "\n".join([
+                    f"{len(errors)} Validation Error(s) found:",
+                    "\n".join(format_text(error_details))
+                ])
+            )
 
-        logger.error("\n".join(lines))
         sys.exit(1)

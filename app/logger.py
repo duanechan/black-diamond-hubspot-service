@@ -1,9 +1,12 @@
 import logging
+import os
 
 from colorlog import ColoredFormatter
 from pythonjsonlogger.json import JsonFormatter
 
-handler = logging.StreamHandler()
+
+def is_json_logging() -> bool:
+    return os.environ.get("LOG_FORMAT", "text") == "json"
 
 json_formatter = JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
 text_formatter = ColoredFormatter(
@@ -27,6 +30,9 @@ text_formatter = ColoredFormatter(
         }
     },
 )
+
+handler = logging.StreamHandler()
+handler.setFormatter(json_formatter if is_json_logging() else text_formatter)
 
 logger = logging.getLogger("app")
 logger.addHandler(handler)
