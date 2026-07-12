@@ -2,8 +2,10 @@ import requests
 
 from app.logger import logger
 
+
 class UnauthorizedError(ValueError):
     "Raised when status code is 401 Unauthorized."
+
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
 
@@ -22,7 +24,7 @@ class HubSpotAuth:
         access_token: str,
         portal_id: str,
     ) -> None:
-        self._auth_url = f"{base_url.rstrip("/")}/account-info/{api_version}/details"
+        self._auth_url = f"{base_url.rstrip('/')}/account-info/{api_version}/details"
         self._access_token = access_token
         self._portal_id = portal_id
         self._request_timeout = 10
@@ -55,7 +57,7 @@ class HubSpotAuth:
         response = requests.get(
             url=self._auth_url,
             headers=self.get_headers(),
-            timeout=self._request_timeout
+            timeout=self._request_timeout,
         )
         if response.status_code == 401:
             raise UnauthorizedError(
@@ -73,5 +75,7 @@ class HubSpotAuth:
                 "Verify the portal ID of the HubSpot account in use."
             )
 
-        logger.info(f"HubSpot token validated. Portal: {portal_id} ({data.get("uiDomain", "-")})")
+        logger.info(
+            f"HubSpot token validated. Portal: {portal_id} ({data.get('uiDomain', '-')})"
+        )
         return True

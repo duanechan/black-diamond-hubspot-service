@@ -8,11 +8,12 @@ from pythonjsonlogger.json import JsonFormatter
 def is_json_logging() -> bool:
     return os.environ.get("LOG_FORMAT", "text") == "json"
 
+
 json_formatter = JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
 text_formatter = ColoredFormatter(
-    "%(asctime_log_color)s%(asctime)s%(reset)s " +
-    "%(log_color)s%(levelname)-6s%(reset)s " +
-    "%(message)s",
+    "%(asctime_log_color)s%(asctime)s%(reset)s "
+    + "%(log_color)s%(levelname)-6s%(reset)s "
+    + "%(message)s",
     log_colors={
         "DEBUG": "bold_light_blue",
         "INFO": "bold_white",
