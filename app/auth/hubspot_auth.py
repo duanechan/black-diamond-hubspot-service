@@ -24,7 +24,8 @@ class HubSpotAuth:
         access_token: str,
         portal_id: str,
     ) -> None:
-        self._auth_url = f"{base_url.rstrip('/')}/account-info/{api_version}/details"
+        self.base_url = base_url
+        self.api_version = api_version
         self._access_token = access_token
         self._portal_id = portal_id
         self._request_timeout = 10
@@ -55,7 +56,7 @@ class HubSpotAuth:
                 token's portal does not match HUBSPOT_PORTAL_ID.
         """
         response = requests.get(
-            url=self._auth_url,
+            url=f"{self.base_url.rstrip('/')}/account-info/{self.api_version}/details",
             headers=self.get_headers(),
             timeout=self._request_timeout,
         )
