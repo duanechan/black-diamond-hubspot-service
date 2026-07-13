@@ -1,8 +1,7 @@
 from flask import Blueprint, current_app
 
-from app.auth.hubspot_auth import HubSpotAuth
+from app.clients.hubspot_client import HubSpotClient
 from app.config import Settings
-from app.logger import logger
 
 health_bp = Blueprint("health", __name__, url_prefix="/api/health")
 
@@ -10,17 +9,11 @@ health_bp = Blueprint("health", __name__, url_prefix="/api/health")
 @health_bp.route("/")
 def health():
     settings: Settings = current_app.extensions["settings"]
-    auth: HubSpotAuth = current_app.extensions["auth"]
+    client: HubSpotClient = current_app.extensions["client"]
 
-    is_hubspot_ok = False
+    is_hubspot_ok = client.ping()
     is_minio_ok = False
     is_kafka_ok = False
-
-    try:
-        is_hubspot_ok = auth.validate()
-    except Exception:
-        logger.error("HubSpot not connected. Re-verify credentials")
-
     is_healthy = is_hubspot_ok and is_minio_ok and is_kafka_ok
 
     return {

@@ -106,3 +106,13 @@ class HubSpotClient:
                 after = next_cursor
             else:
                 break
+
+    def ping(self) -> bool:
+        if self._auth.is_authenticated(max_age_seconds=300):
+            return True
+
+        try:
+            return self._auth.validate()
+        except Exception as e:
+            logger.warning(f"HubSpot ping failed: {e}")
+            return False

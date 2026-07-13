@@ -34,6 +34,9 @@ text_formatter = ColoredFormatter(
 
 handler = logging.StreamHandler()
 handler.setFormatter(json_formatter if is_json_logging() else text_formatter)
+werkzeug_logger = logging.getLogger("werkzeug")
+werkzeug_logger.handlers = [handler]
+werkzeug_logger.propagate = False
 
 logger = logging.getLogger("app")
 logger.addHandler(handler)
