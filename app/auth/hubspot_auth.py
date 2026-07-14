@@ -35,6 +35,10 @@ class HubSpotAuth:
         self._is_authenticated = False
         self._last_validated_at: Optional[datetime] = None
 
+    @property
+    def access_token(self) -> str:
+        return self._access_token
+
     def get_headers(self) -> dict[str, str]:
         """Returns standard auth headers for HubSpot API requests.
 
