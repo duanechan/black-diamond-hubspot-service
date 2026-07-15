@@ -5,6 +5,7 @@ from hubspot.crm.objects import (
     ApiException,
     CollectionResponseSimplePublicObjectWithAssociationsForwardPaging,
 )
+from urllib3.util.retry import Retry
 
 from app.auth.hubspot_auth import HubSpotAuth
 from app.logger import logger
@@ -22,16 +23,19 @@ class HubSpotClient:
         self,
         auth: HubSpotAuth,
         page_size: int = 100,
-        rate_limit: int = 10,
         include_associations: bool = True,
-        timeout: int = 30,
+        max_retries: int = 5,
     ) -> None:
-        self._client = HubSpot(access_token=auth.access_token)
+        self._client = HubSpot(
+            access_token=auth.access_token,
+            retry=Retry(
+                total=max_retries,
+                status_forcelist=[429, 500, 502, 503, 504],
+            ),
+        )
         self._auth = auth
         self._page_size = page_size
-        self._rate_limit = rate_limit
         self._include_associations = include_associations
-        self._timeout = timeout
 
     def iter_objects(
         self,
@@ -68,12 +72,15 @@ class HubSpotClient:
                 f"Failed to retrieve paginated-list of {object_type}: {e}"
             )
 
+    def validate_auth(self) -> bool:
+        return self._auth.validate()
+
     def ping(self) -> bool:
         if self._auth.is_authenticated(max_age_seconds=300):
             return True
 
         try:
-            return self._auth.validate()
+            return self.validate_auth()
         except Exception as e:
             logger.warning(f"HubSpot ping failed: {e}")
             return False

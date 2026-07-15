@@ -1,10 +1,11 @@
 from flask import Flask
+from flask_restx.api import Api
 
 from app.auth.hubspot_auth import HubSpotAuth
 from app.clients.hubspot_client import HubSpotClient
 from app.config import Settings, validate_settings
 from app.logger import logger, werkzeug_logger
-from app.routes.health import health_bp
+from app.routes.health import health_ns
 
 
 def create_app(settings: Settings) -> Flask:
@@ -21,27 +22,24 @@ def create_app(settings: Settings) -> Flask:
     # =========================================================================================
 
     app.extensions["settings"] = settings
-
-    auth = HubSpotAuth(
-        base_url=settings.HUBSPOT_BASE_URL,
-        api_version=settings.HUBSPOT_API_VERSION,
-        access_token=settings.HUBSPOT_ACCESS_TOKEN.get_secret_value(),
-        portal_id=settings.HUBSPOT_PORTAL_ID,
-    )
-    auth.validate()
-
     app.extensions["client"] = HubSpotClient(
-        auth=auth,
+        auth=HubSpotAuth(
+            base_url=settings.HUBSPOT_BASE_URL,
+            api_version=settings.HUBSPOT_API_VERSION,
+            access_token=settings.HUBSPOT_ACCESS_TOKEN.get_secret_value(),
+            portal_id=settings.HUBSPOT_PORTAL_ID,
+        ),
         page_size=settings.HUBSPOT_PAGE_SIZE,
-        rate_limit=settings.HUBSPOT_RATE_LIMIT_RPS,
         include_associations=settings.HUBSPOT_INCLUDE_ASSOCIATIONS,
     )
+    app.extensions["client"].validate_auth()
 
     # =========================================================================================
     #                                         Routes
     # =========================================================================================
 
-    app.register_blueprint(health_bp)
+    api = Api(app, title=settings.APP_TITLE, version=settings.APP_VERSION)
+    api.add_namespace(health_ns, path="/api/health")
 
     return app
 
