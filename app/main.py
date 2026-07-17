@@ -6,6 +6,8 @@ from app.clients.hubspot_client import HubSpotClient
 from app.config import Settings, validate_settings
 from app.logger import logger, werkzeug_logger
 from app.routes.health import health_ns
+from app.routes.scan import scan_ns
+from app.services.extraction_service import ExtractionService
 
 
 def create_app(settings: Settings) -> Flask:
@@ -33,6 +35,9 @@ def create_app(settings: Settings) -> Flask:
         include_associations=settings.HUBSPOT_INCLUDE_ASSOCIATIONS,
     )
     app.extensions["client"].validate_auth()
+    app.extensions["extract_service"] = ExtractionService(
+        client=app.extensions["client"]
+    )
 
     # =========================================================================================
     #                                         Routes
@@ -40,6 +45,7 @@ def create_app(settings: Settings) -> Flask:
 
     api = Api(app, title=settings.APP_TITLE, version=settings.APP_VERSION)
     api.add_namespace(health_ns, path="/api/health")
+    api.add_namespace(scan_ns, path="/api/scan")
 
     return app
 

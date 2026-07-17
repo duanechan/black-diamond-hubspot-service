@@ -10,7 +10,8 @@ health_response = health_ns.model(
     "HealthResponse",
     {
         "status": fields.String(
-            description="Overall service status", enum=["healthy", "degraded"]
+            description="Overall service status",
+            enum=["healthy", "degraded"],
         ),
         "service": fields.String(description="Service name"),
         "version": fields.String(description="Service version"),
