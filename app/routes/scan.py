@@ -1,9 +1,17 @@
+import uuid
 from datetime import datetime
 
 from flask import current_app, request
 from flask_restx import Namespace, Resource, fields
 
 from app.services.extraction_service import ExtractionService
+
+DEFAULT_PROPERTIES_BY_OBJECT: dict[str, list[str]] = {
+    "contacts": ["email", "firstname", "lastname", "lastmodifieddate"],
+    "companies": ["name", "domain", "lastmodifieddate"],
+    "deals": ["dealname", "amount", "dealstage", "lastmodifieddate"],
+    "tickets": ["subject", "content", "hs_pipeline_stage", "lastmodifieddate"],
+}
 
 scan_ns = Namespace("scan", description="Scan operations")
 
@@ -72,16 +80,38 @@ class Start(Resource):
             },
         )
 
-        if scan_id is None or org_id is None or len(object_types) == 0:
-            return {}, 400
+        last_modified_after = filters.get("last_modified_after")
+        last_modified_after_ms = (
+            int(datetime.fromisoformat(last_modified_after).timestamp() * 1000)
+            if last_modified_after is not None
+            else None
+        )
+
+        missing_fields = []
+        if scan_id is None:
+            missing_fields.append("scan_id")
+
+        if org_id is None:
+            missing_fields.append("org_id")
+
+        if len(object_types) == 0:
+            missing_fields.append("objects")
+
+        if len(missing_fields) > 0:
+            return {
+                "request_id": request.headers.get("X-Request-ID", str(uuid.uuid4())),
+                "error": "Invalid request body",
+                "fields": build_validation_errors(missing_fields),
+            }, 400
 
         es: ExtractionService = current_app.extensions["extraction_service"]
         extractions = es.start_scan(
             object_types=object_types,
-            properties_by_object={},
-            last_modified_after_ms=int(
-                datetime.fromisoformat(filters.get("last_modified_after")).timestamp()
-            ),
+            properties_by_object={
+                object_type: DEFAULT_PROPERTIES_BY_OBJECT.get(object_type, [])
+                for object_type in object_types
+            },
+            last_modified_after_ms=last_modified_after_ms,
         )
         success = all(e["status"] == "completed" for e in extractions.values())
         return {
@@ -91,3 +121,25 @@ class Start(Resource):
             "extractions": extractions,
             "message": "Scan completed" if success else "Scan completed with failures",
         }, 202
+
+
+def build_validation_errors(missing_fields: list[str]) -> dict[str, dict[str, str]]:
+    FIELD_ERRORS = {
+        "scan_id": {
+            "error": "`scan_id` not provided",
+            "fix": "Set the `scan_id` field to a UUID (v4) string in the request body.",
+        },
+        "org_id": {
+            "error": "`org_id` not provided",
+            "fix": "Set the `org_id` field to the organization ID.",
+        },
+        "objects": {
+            "error": "`objects` list is empty",
+            "fix": "Specify the objects to be extracted ('contacts', 'leads', e.g.).",
+        },
+    }
+
+    return {
+        field: FIELD_ERRORS.get(field, {"error": "Unknown error"})
+        for field in missing_fields
+    }
