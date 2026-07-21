@@ -36,8 +36,10 @@ class HubSpotClient:
             auth: Provides the access token used to authenticate requests.
             page_size: Number of records to request per page. HubSpot's
                 list/search endpoints cap this at 100.
-            include_associations: Reserved for future use; not yet applied
-                to any request.
+            include_associations: Master switch for association fetching. If
+                False, associations are never requested regardless of what's
+                passed to `iter_objects`. If True, per-call `associations`
+                lists are respected.
             max_retries: Maximum number of retry attempts for failed
                 requests (429/500/502/503/504), handled by the underlying
                 SDK's transport layer.
@@ -57,6 +59,7 @@ class HubSpotClient:
         self,
         object_type: str,
         properties: list[str],
+        associations: Optional[list[str]] = None,
         last_modified_after_ms: Optional[int] = None,
     ) -> Iterator[list[dict]]:
         """Iterates over pages of HubSpot CRM records for a given object type.
@@ -69,6 +72,9 @@ class HubSpotClient:
         Args:
             object_type: HubSpot object type to fetch (e.g. "contacts").
             properties: Property names to include on each returned record.
+            associations: Object types to fetch associated record IDs for
+                (e.g. ["companies"]). Ignored entirely if the client was
+                constructed with `include_associations=False`.
             last_modified_after_ms: If set, only returns records modified
                 at or after this Unix timestamp in milliseconds, using the
                 Search API instead of the list endpoint.
@@ -89,6 +95,9 @@ class HubSpotClient:
                         CollectionResponseSimplePublicObjectWithAssociationsForwardPaging,
                         self._client.crm.objects.basic_api.get_page(
                             object_type=object_type,
+                            associations=(associations or [])
+                            if self._include_associations
+                            else [],
                             properties=properties,
                             limit=self._page_size,
                             after=after,
@@ -112,6 +121,9 @@ class HubSpotClient:
                         CollectionResponseWithTotalSimplePublicObjectForwardPaging,
                         self._client.crm.objects.search_api.do_search(
                             object_type=object_type,
+                            associations=(associations or [])
+                            if self._include_associations
+                            else [],
                             public_object_search_request=search_request,
                         ),
                     )

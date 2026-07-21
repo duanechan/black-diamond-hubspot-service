@@ -35,7 +35,7 @@ def create_app(settings: Settings) -> Flask:
         include_associations=settings.HUBSPOT_INCLUDE_ASSOCIATIONS,
     )
     app.extensions["client"].validate_auth()
-    app.extensions["extract_service"] = ExtractionService(
+    app.extensions["extraction_service"] = ExtractionService(
         client=app.extensions["client"]
     )
 

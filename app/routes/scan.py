@@ -6,11 +6,23 @@ from flask_restx import Namespace, Resource, fields
 
 from app.services.extraction_service import ExtractionService
 
-DEFAULT_PROPERTIES_BY_OBJECT: dict[str, list[str]] = {
-    "contacts": ["email", "firstname", "lastname", "lastmodifieddate"],
-    "companies": ["name", "domain", "lastmodifieddate"],
-    "deals": ["dealname", "amount", "dealstage", "lastmodifieddate"],
-    "tickets": ["subject", "content", "hs_pipeline_stage", "lastmodifieddate"],
+DEFAULT_PROPERTIES_BY_OBJECT = {
+    "contacts": {
+        "fields": ["email", "firstname", "lastname", "lastmodifieddate"],
+        "associations": ["companies"],
+    },
+    "companies": {
+        "fields": ["name", "domain", "lastmodifieddate"],
+        "associations": ["contacts"],
+    },
+    "deals": {
+        "fields": ["dealname", "amount", "dealstage", "lastmodifieddate"],
+        "associations": ["contacts", "companies"],
+    },
+    "tickets": {
+        "fields": ["subject", "content", "hs_pipeline_stage", "lastmodifieddate"],
+        "associations": ["contacts", "companies"],
+    },
 }
 
 scan_ns = Namespace("scan", description="Scan operations")
@@ -108,7 +120,17 @@ class Start(Resource):
         extractions = es.start_scan(
             object_types=object_types,
             properties_by_object={
-                object_type: DEFAULT_PROPERTIES_BY_OBJECT.get(object_type, [])
+                object_type: DEFAULT_PROPERTIES_BY_OBJECT.get(object_type, {}).get(
+                    "fields", []
+                )
+                for object_type in object_types
+            },
+            associations_by_object={
+                object_type: DEFAULT_PROPERTIES_BY_OBJECT.get(object_type, {}).get(
+                    "associations", []
+                )
+                if include_associations
+                else []
                 for object_type in object_types
             },
             last_modified_after_ms=last_modified_after_ms,
