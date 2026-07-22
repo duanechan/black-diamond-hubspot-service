@@ -8,6 +8,7 @@ from app.logger import logger, werkzeug_logger
 from app.routes.health import health_ns
 from app.routes.scan import scan_ns
 from app.services.extraction_service import ExtractionService
+from app.services.normalization_service import NormalizationService
 
 
 def create_app(settings: Settings) -> Flask:
@@ -36,7 +37,8 @@ def create_app(settings: Settings) -> Flask:
     )
     app.extensions["client"].validate_auth()
     app.extensions["extraction_service"] = ExtractionService(
-        client=app.extensions["client"]
+        normalizer=NormalizationService(),
+        client=app.extensions["client"],
     )
 
     # =========================================================================================

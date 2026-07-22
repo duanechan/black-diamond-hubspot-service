@@ -2,6 +2,7 @@ from typing import Optional
 
 from app.clients.hubspot_client import HubSpotClient, HubSpotClientError
 from app.logger import logger
+from app.services.normalization_service import NormalizationService
 
 
 class ExtractionService:
@@ -14,13 +15,22 @@ class ExtractionService:
     exist only for the duration of the call.
     """
 
-    def __init__(self, client: HubSpotClient) -> None:
+    def __init__(
+        self,
+        normalizer: NormalizationService,
+        client: HubSpotClient,
+    ) -> None:
         """Initializes the extraction service.
 
         Args:
+            normalizer: Converts extracted records into storable output
+                formats (JSON/Parquet). Not yet used by `start_scan` — held
+                here in preparation for wiring in once a storage destination
+                (e.g. MinIO) exists to write normalized output to.
             client: HubSpot client used to fetch records for each object
                 type requested by a scan.
         """
+        self._normalizer = normalizer
         self._client = client
 
     def start_scan(
