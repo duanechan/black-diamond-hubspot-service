@@ -4,6 +4,7 @@ from datetime import datetime
 from flask import current_app, request
 from flask_restx import Namespace, Resource, fields
 
+from app.config import Settings
 from app.services.extraction_service import ExtractionService
 
 DEFAULT_PROPERTIES_BY_OBJECT = {
@@ -76,17 +77,20 @@ class Start(Resource):
     @scan_ns.response(202, "Successful")
     @scan_ns.response(400, "Bad Request")
     def post(self):
+        settings: Settings = current_app.extensions["settings"]
         data = request.get_json()
         scan_id = data.get("scan_id")
         org_id = data.get("org_id")
         object_types = data.get("objects", [])
         filters = data.get("filters", {})
-        include_associations = data.get("include_associations", True)
+        include_associations = data.get(
+            "include_associations", settings.HUBSPOT_INCLUDE_ASSOCIATIONS
+        )
         output_format = data.get("output_format", "parquet")
         destination = data.get(
             "destination",
             {
-                "minio_bucket": "REPLACE_WITH_MINO_BUCKET",
+                "minio_bucket": settings.MINIO_BUCKET,
                 "kafka_publish": True,
                 "clickhouse_load": False,
             },
@@ -118,6 +122,8 @@ class Start(Resource):
 
         es: ExtractionService = current_app.extensions["extraction_service"]
         extractions = es.start_scan(
+            scan_id=scan_id,  # pyright: ignore[reportArgumentType]
+            org_id=org_id,  # pyright: ignore[reportArgumentType]
             object_types=object_types,
             properties_by_object={
                 object_type: DEFAULT_PROPERTIES_BY_OBJECT.get(object_type, {}).get(
@@ -134,6 +140,8 @@ class Start(Resource):
                 for object_type in object_types
             },
             last_modified_after_ms=last_modified_after_ms,
+            output_format=output_format,
+            destination=destination,
         )
         success = all(e["status"] == "completed" for e in extractions.values())
         return {

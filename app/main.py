@@ -9,6 +9,7 @@ from app.routes.health import health_ns
 from app.routes.scan import scan_ns
 from app.services.extraction_service import ExtractionService
 from app.services.normalization_service import NormalizationService
+from app.storage.minio_client import MinioClient
 
 
 def create_app(settings: Settings) -> Flask:
@@ -38,6 +39,14 @@ def create_app(settings: Settings) -> Flask:
     app.extensions["client"].validate_auth()
     app.extensions["extraction_service"] = ExtractionService(
         normalizer=NormalizationService(),
+        minio=MinioClient(
+            enabled=settings.MINIO_ENABLED,
+            endpoint=settings.MINIO_ENDPOINT,
+            access_key=settings.MINIO_ACCESS_KEY.get_secret_value(),
+            secret_key=settings.MINIO_SECRET_KEY.get_secret_value(),
+            secure=settings.MINIO_SECURE,
+            bucket=settings.MINIO_BUCKET,
+        ),
         client=app.extensions["client"],
     )
 
