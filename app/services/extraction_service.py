@@ -2,20 +2,12 @@ import json
 from datetime import UTC, datetime
 
 from app.clients.hubspot_client import HubSpotClient, HubSpotClientError
+from app.constants import KAFKA_TOPIC_PREFIX_BY_OBJECT
 from app.logger import logger
 from app.services.normalization_service import NormalizationService
+from app.services.pii_service import PIIService
 from app.storage.kafka_producer import KafkaProducer
 from app.storage.minio_client import MinioClient, MinioClientError
-
-KAFKA_TOPIC_PREFIX_BY_OBJECT: dict[str, str] = {
-    "contacts": "hs.contacts",
-    "companies": "hs.companies",
-    "deals": "hs.deals",
-    "tickets": "hs.tickets",
-    "leads": "hs.leads",
-    "owners": "hs.owners",
-    "engagements": "hs.engagements",
-}
 
 
 class ExtractionService:
@@ -33,6 +25,7 @@ class ExtractionService:
         normalizer: NormalizationService,
         minio: MinioClient,
         kafka: KafkaProducer,
+        pii: PIIService,
         client: HubSpotClient,
         environment: str,
     ) -> None:
@@ -46,6 +39,10 @@ class ExtractionService:
                 with `enabled=False`.
             kafka: Publishes one message per record to Kafka when a scan
                 requests `destination.kafka_publish`.
+            pii: Masks PII fields in records before they're published to
+                Kafka. A no-op if constructed with `enabled=False`; raises
+                if constructed with `enabled=True` (masking isn't yet
+                implemented).
             client: HubSpot client used to fetch records for each object
                 type requested by a scan.
             environment: Deployment environment (e.g. "dev", "stage",
@@ -55,6 +52,7 @@ class ExtractionService:
         self._normalizer = normalizer
         self._minio = minio
         self._kafka = kafka
+        self._pii = pii
         self._client = client
         self._environment = environment
 
@@ -67,6 +65,9 @@ class ExtractionService:
         page: list[dict],
     ) -> None:
         """Publishes one Kafka message per record in a page, then flushes.
+
+        PII fields are masked (per `PIIService`) before publishing, if PII
+        masking is enabled.
 
         Args:
             object_type: HubSpot object type the records belong to. Must
@@ -85,6 +86,8 @@ class ExtractionService:
         topic = f"{KAFKA_TOPIC_PREFIX_BY_OBJECT[object_type]}.{self._environment}"
         extracted_at = datetime.now(UTC).isoformat()
 
+        page = self._pii.mask(page)
+
         for record in page:
             message = {
                 "meta": {
@@ -95,9 +98,11 @@ class ExtractionService:
                     "page": page_num,
                     "extracted_at": extracted_at,
                 },
-                # TODO: apply PII masking here when PII_MASKING_ENABLED,
-                # once PIIService exists. Currently published as-is.
-                "record": record,
+                "record": {
+                    "hs_object_id": record.get("id"),
+                    **record.get("properties", {}),
+                    "associations": record.get("associations"),
+                },
             }
             self._kafka.produce(
                 topic,

@@ -9,6 +9,7 @@ from app.routes.health import health_ns
 from app.routes.scan import scan_ns
 from app.services.extraction_service import ExtractionService
 from app.services.normalization_service import NormalizationService
+from app.services.pii_service import PIIService
 from app.storage.kafka_producer import KafkaProducer
 from app.storage.minio_client import MinioClient
 
@@ -50,6 +51,10 @@ def create_app(settings: Settings) -> Flask:
         ),
         kafka=KafkaProducer(
             bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+        ),
+        pii=PIIService(
+            enabled=settings.PII_MASKING_ENABLED,
+            hmac_key=settings.PII_HMAC_KEY.get_secret_value(),
         ),
         client=app.extensions["client"],
         environment=settings.ENVIRONMENT,
