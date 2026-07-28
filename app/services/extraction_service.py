@@ -112,6 +112,54 @@ class ExtractionService:
 
         self._kafka.flush()
 
+    def _upload_metadata(
+        self,
+        org_id: str,
+        scan_id: str,
+        object_type: str,
+        total_records: int,
+        pages: int,
+        last_modified_after_ms: int | None,
+    ) -> str | None:
+        """Uploads a summary metadata file for a completed object type.
+
+        Written once per object type, after all its pages have been
+        uploaded — not per page. Lets downstream consumers discover how
+        many pages/records exist for an object type without listing the
+        bucket.
+
+        Args:
+            org_id: Organization identifier, used to namespace the file.
+            scan_id: Scan identifier, used to namespace the file.
+            object_type: HubSpot object type this metadata describes.
+            total_records: Total records fetched for this object type.
+            pages: Number of pages uploaded for this object type.
+            last_modified_after_ms: The incremental filter used for this
+                scan, if any (None for a full scan).
+
+        Returns:
+            The object key the metadata was uploaded to, or None if MinIO
+            is disabled.
+        """
+        metadata = {
+            "object": object_type,
+            "scan_id": scan_id,
+            "total_records": total_records,
+            "pages": pages,
+            "filter": (
+                {"last_modified_after_ms": last_modified_after_ms}
+                if last_modified_after_ms is not None
+                else None
+            ),
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        return self._minio.upload_metadata(
+            org_id=org_id,
+            scan_id=scan_id,
+            object_type=object_type,
+            data=json.dumps(metadata).encode("utf-8"),
+        )
+
     def start_scan(
         self,
         scan_id: str,
@@ -128,10 +176,12 @@ class ExtractionService:
         Fetches every page of records for each object type in turn via
         `HubSpotClient.iter_objects`, counting records as they arrive. If
         `output_format` is set, each page is also normalized and uploaded
-        to MinIO before moving to the next page. If `destination.kafka_publish`
-        is set, one Kafka message is published per record in each page
-        (not one summary event per object type), to a topic selected by
-        object type and deployment environment.
+        to MinIO before moving to the next page, and a `_metadata.json`
+        summary is uploaded once per object type after its pages finish.
+        If `destination.kafka_publish` is set, one Kafka message is
+        published per record in each page (not one summary event per
+        object type), to a topic selected by object type and deployment
+        environment.
 
         Each object type is handled independently — a failure on one type
         (whether fetching, normalizing, uploading, or publishing) is
@@ -176,7 +226,8 @@ class ExtractionService:
                   supported; only presence/absence of this key is checked.
                 - "kafka_publish": if True, publishes one Kafka message
                   per extracted record, per the schema in the design doc
-                  (section 11.2). PII masking is not yet applied.
+                  (section 11.2). PII fields are masked per
+                  `PII_MASKING_ENABLED` before publishing.
                 - "clickhouse_load": if True, loads normalized data into
                   ClickHouse. Not yet implemented — raises
                   `NotImplementedError` if set.
@@ -210,6 +261,7 @@ class ExtractionService:
             try:
                 record_count = 0
                 uploaded_keys: list[str] = []
+                page_num = 0
                 for page_num, page in enumerate(
                     self._client.iter_objects(
                         object_type,
@@ -238,11 +290,23 @@ class ExtractionService:
                     if publish_to_kafka:
                         self._publish_page(object_type, org_id, scan_id, page_num, page)
 
-                    extractions[object_type] = {
-                        "status": "completed",
-                        "record_count": record_count,
-                        "uploaded_keys": uploaded_keys,
-                    }
+                if output_format is not None and upload_to_minio and page_num > 0:
+                    metadata_key = self._upload_metadata(
+                        org_id=org_id,
+                        scan_id=scan_id,
+                        object_type=object_type,
+                        total_records=record_count,
+                        pages=page_num,
+                        last_modified_after_ms=last_modified_after_ms,
+                    )
+                    if metadata_key is not None:
+                        uploaded_keys.append(metadata_key)
+
+                extractions[object_type] = {
+                    "status": "completed",
+                    "record_count": record_count,
+                    "uploaded_keys": uploaded_keys,
+                }
             except HubSpotClientError as e:
                 logger.warning(f"Failed to scan {object_type}: {e}")
                 extractions[object_type] = {"status": "failed", "error": str(e)}

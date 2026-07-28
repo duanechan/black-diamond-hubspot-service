@@ -1,5 +1,4 @@
 from io import BytesIO
-from typing import Optional
 
 from minio import Minio
 
@@ -100,7 +99,7 @@ class MinioClient:
         object_type: str,
         page: int,
         output_format: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Uploads normalized data to MinIO.
 
         Args:
@@ -135,5 +134,50 @@ class MinioClient:
             )
         except Exception as e:
             raise MinioClientError(f"Failed to upload to '{object_key}': {e}")
+
+        return object_key
+
+    def upload_metadata(
+        self,
+        org_id: str,
+        scan_id: str,
+        object_type: str,
+        data: bytes,
+    ) -> str | None:
+        """Uploads a metadata summary file for a completed object type.
+
+        Unlike `upload()`, this always writes to a fixed key
+        (`{org_id}/{scan_id}/{object_type}/_metadata.json`), not a
+        page-numbered one — there is exactly one metadata file per
+        object type per scan.
+
+        Args:
+            org_id: Organization identifier, used to namespace the object key.
+            scan_id: Scan identifier, used to namespace the object key.
+            object_type: HubSpot object type this metadata describes.
+            data: The metadata JSON, as bytes.
+
+        Returns:
+            The object key the data was uploaded to, or None if MinIO is
+            disabled.
+
+        Raises:
+            MinioClientError: If the upload fails.
+        """
+        if not self.enabled:
+            return None
+        assert self._client is not None
+
+        object_key = f"{org_id}/{scan_id}/{object_type}/_metadata.json"
+
+        try:
+            self._client.put_object(
+                bucket_name=self._bucket,
+                object_name=object_key,
+                data=BytesIO(data),
+                length=len(data),
+            )
+        except Exception as e:
+            raise MinioClientError(f"Failed to upload metadata to '{object_key}': {e}")
 
         return object_key
