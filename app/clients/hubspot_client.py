@@ -1,5 +1,7 @@
-from typing import Iterator, Optional, cast
+from collections.abc import Iterator
+from typing import cast
 
+import requests
 from hubspot import HubSpot
 from hubspot.crm.objects import (
     ApiException,
@@ -59,8 +61,8 @@ class HubSpotClient:
         self,
         object_type: str,
         properties: list[str],
-        associations: Optional[list[str]] = None,
-        last_modified_after_ms: Optional[int] = None,
+        associations: list[str] | None = None,
+        last_modified_after_ms: int | None = None,
     ) -> Iterator[list[dict]]:
         """Iterates over pages of HubSpot CRM records for a given object type.
 
@@ -87,7 +89,7 @@ class HubSpotClient:
             HubSpotClientError: If a request fails (wraps the underlying
                 ApiException).
         """
-        after: Optional[str] = None
+        after: str | None = None
         try:
             while True:
                 if last_modified_after_ms is None:
@@ -174,3 +176,48 @@ class HubSpotClient:
         except Exception as e:
             logger.warning(f"HubSpot ping failed: {e}")
             return False
+
+    def get_portal_info(self) -> dict:
+        """Fetches HubSpot portal metadata.
+
+        Returns:
+            The raw account-info response (portalId, uiDomain,
+            dataHostingLocation, timeZone, etc.)
+
+        Raises:
+            HubSpotClientError: If the request fails.
+        """
+        try:
+            response = requests.get(
+                url=f"{self._auth.base_url.rstrip('/')}/account-info/{self._auth.api_version}/details",
+                headers=self._auth.get_headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            raise HubSpotClientError(f"Failed to fetch portal info: {e}")
+
+    def get_api_usage(self) -> dict:
+        """Fetches current daily API usage and limits for this private app.
+
+        Returns:
+            The first entry from the account-info daily usage endpoint's
+            `results` array (usageLimit, currentUsage, collectedAt, etc.)
+
+        Raises:
+            HubSpotClientError: If the request fails or returns no results.
+        """
+        try:
+            response = requests.get(
+                url=f"{self._auth.base_url.rstrip('/')}/account-info/{self._auth.api_version}/api-usage/daily/private-apps",
+                headers=self._auth.get_headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            results = response.json().get("results", [])
+            if not results:
+                raise HubSpotClientError("No API usage data returned")
+            return results[0]
+        except requests.RequestException as e:
+            raise HubSpotClientError(f"Failed to fetch API usage: {e}")

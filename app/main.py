@@ -5,7 +5,10 @@ from app.auth.hubspot_auth import HubSpotAuth
 from app.clients.hubspot_client import HubSpotClient
 from app.config import Settings, validate_settings
 from app.logger import logger, werkzeug_logger
+from app.routes.batch import batch_ns
 from app.routes.health import health_ns
+from app.routes.key import key_ns
+from app.routes.objects import objects_ns
 from app.routes.scan import scan_ns
 from app.services.extraction_service import ExtractionService
 from app.services.normalization_service import NormalizationService
@@ -67,6 +70,9 @@ def create_app(settings: Settings) -> Flask:
     api = Api(app, title=settings.APP_TITLE, version=settings.APP_VERSION)
     api.add_namespace(health_ns, path="/api/health")
     api.add_namespace(scan_ns, path="/api/scan")
+    api.add_namespace(objects_ns, path="/api/objects")
+    api.add_namespace(key_ns, path="/api/key")
+    api.add_namespace(batch_ns, path="/api/batch")
 
     return app
 

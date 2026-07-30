@@ -4,27 +4,10 @@ from datetime import datetime
 from flask import current_app, request
 from flask_restx import Namespace, Resource, fields
 
+from app.auth.hmac_auth import require_hmac
 from app.config import Settings
+from app.constants import SUPPORTED_OBJECTS
 from app.services.extraction_service import ExtractionService
-
-DEFAULT_PROPERTIES_BY_OBJECT = {
-    "contacts": {
-        "fields": ["email", "firstname", "lastname", "lastmodifieddate"],
-        "associations": ["companies"],
-    },
-    "companies": {
-        "fields": ["name", "domain", "lastmodifieddate"],
-        "associations": ["contacts"],
-    },
-    "deals": {
-        "fields": ["dealname", "amount", "dealstage", "lastmodifieddate"],
-        "associations": ["contacts", "companies"],
-    },
-    "tickets": {
-        "fields": ["subject", "content", "hs_pipeline_stage", "lastmodifieddate"],
-        "associations": ["contacts", "companies"],
-    },
-}
 
 scan_ns = Namespace("scan", description="Scan operations")
 
@@ -76,6 +59,7 @@ class Start(Resource):
     @scan_ns.marshal_with(scan_start_response)
     @scan_ns.response(202, "Successful")
     @scan_ns.response(400, "Bad Request")
+    @require_hmac()
     def post(self):
         settings: Settings = current_app.extensions["settings"]
         data = request.get_json()
@@ -126,14 +110,14 @@ class Start(Resource):
             org_id=org_id,  # pyright: ignore[reportArgumentType]
             object_types=object_types,
             properties_by_object={
-                object_type: DEFAULT_PROPERTIES_BY_OBJECT.get(object_type, {}).get(
-                    "fields", []
+                object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
+                    "default_properties", []
                 )
                 for object_type in object_types
             },
             associations_by_object={
-                object_type: DEFAULT_PROPERTIES_BY_OBJECT.get(object_type, {}).get(
-                    "associations", []
+                object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
+                    "association_targets", []
                 )
                 if include_associations
                 else []
