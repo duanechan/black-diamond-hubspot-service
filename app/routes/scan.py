@@ -16,39 +16,26 @@ scan_start_request = scan_ns.model(
     {
         "scan_id": fields.String(description="Scan ID"),
         "org_id": fields.String(description="Organization ID"),
-        "objects": fields.List(
-            fields.String,
-            description="List of supported objects",
-        ),
-        "filters": fields.Raw(
-            description="Filters",
-        ),  # {"last_modified_after": "2026-01-01T00:00:00Z"}
+        "objects": fields.List(fields.String, description="List of supported objects"),
+        "filters": fields.Raw(description="Filters"),
         "output_format": fields.String(
-            description="Output format",
-            enum=["parquet", "json"],
+            description="Output format", enum=["parquet", "json"]
         ),
         "include_associations": fields.Boolean(
             description="Whether to include associations"
         ),
-        "destination": fields.Raw(
-            description="Destination to store the results in",
-        ),
-        # {
-        #     "minio_bucket": "hubspot-extracts",
-        #     "kafka_publish": true,
-        #     "clickhouse_load": false,
-        # },
+        "destination": fields.Raw(description="Destination to store the results in"),
     },
 )
 
 scan_start_response = scan_ns.model(
     "ScanStartResponse",
     {
-        "success": fields.Boolean(description="Whether the request is successful"),
-        "scan_id": fields.String(description="Scan ID"),
-        "org_id": fields.String(description="Organization ID"),
-        "extractions": fields.Raw(description="Per-object-type extraction results"),
-        "message": fields.String(description="Response message"),
+        "success": fields.Boolean(),
+        "scan_id": fields.String(),
+        "status": fields.String(),
+        "extractions": fields.Raw(),
+        "message": fields.String(),
     },
 )
 
@@ -57,7 +44,7 @@ scan_start_response = scan_ns.model(
 class Start(Resource):
     @scan_ns.expect(scan_start_request)
     @scan_ns.marshal_with(scan_start_response)
-    @scan_ns.response(202, "Successful")
+    @scan_ns.response(202, "Scan started")
     @scan_ns.response(400, "Bad Request")
     @require_hmac()
     def post(self):
@@ -90,10 +77,8 @@ class Start(Resource):
         missing_fields = []
         if scan_id is None:
             missing_fields.append("scan_id")
-
         if org_id is None:
             missing_fields.append("org_id")
-
         if len(object_types) == 0:
             missing_fields.append("objects")
 
@@ -105,35 +90,65 @@ class Start(Resource):
             }, 400
 
         es: ExtractionService = current_app.extensions["extraction_service"]
-        extractions = es.start_scan(
+
+        try:
+            es.validate_scan_params(output_format, destination)
+        except (ValueError, NotImplementedError) as e:
+            return {
+                "request_id": request.headers.get("X-Request-ID", str(uuid.uuid4())),
+                "error": str(e),
+            }, 400
+
+        properties_by_object = {
+            object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
+                "default_properties", []
+            )
+            for object_type in object_types
+        }
+        associations_by_object = {
+            object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
+                "association_targets", []
+            )
+            if include_associations
+            else []
+            for object_type in object_types
+        }
+
+        scans = current_app.extensions["scans"]
+        scans.create(
+            scan_id=scan_id,
+            org_id=org_id,
+            config={
+                "object_types": object_types,
+                "filters": filters,
+                "output_format": output_format,
+                "destination": destination,
+            },
+        )
+
+        es.start_scan_async(
             scan_id=scan_id,  # pyright: ignore[reportArgumentType]
             org_id=org_id,  # pyright: ignore[reportArgumentType]
             object_types=object_types,
-            properties_by_object={
-                object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
-                    "default_properties", []
-                )
-                for object_type in object_types
-            },
-            associations_by_object={
-                object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
-                    "association_targets", []
-                )
-                if include_associations
-                else []
-                for object_type in object_types
-            },
+            properties_by_object=properties_by_object,
+            associations_by_object=associations_by_object,
             last_modified_after_ms=last_modified_after_ms,
             output_format=output_format,
             destination=destination,
         )
-        success = all(e["status"] == "completed" for e in extractions.values())
+
         return {
-            "success": success,
-            "scan_id": data["scan_id"],
-            "org_id": data["org_id"],
-            "extractions": extractions,
-            "message": "Scan completed" if success else "Scan completed with failures",
+            "success": True,
+            "scan_id": scan_id,
+            "status": "started",
+            "extractions": {
+                object_type: {"status": "in_progress", "cursor": None}
+                for object_type in object_types
+            },
+            "message": (
+                f"{len(object_types)} HubSpot extraction jobs started. "
+                f"Poll /api/scan/{scan_id}/status for progress."
+            ),
         }, 202
 
 
@@ -152,7 +167,6 @@ def build_validation_errors(missing_fields: list[str]) -> dict[str, dict[str, st
             "fix": "Specify the objects to be extracted ('contacts', 'leads', e.g.).",
         },
     }
-
     return {
         field: FIELD_ERRORS.get(field, {"error": "Unknown error"})
         for field in missing_fields

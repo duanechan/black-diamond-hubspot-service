@@ -173,7 +173,7 @@ class HubSpotClient:
 
         try:
             return self.validate_auth()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"HubSpot ping failed: {e}")
             return False
 

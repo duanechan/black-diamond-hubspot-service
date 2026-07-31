@@ -1,4 +1,15 @@
 services:
+    postgres:
+        image: "postgres:18"
+        ports:
+            - "5432:5432"
+        environment:
+            POSTGRES_USER: dev_user
+            POSTGRES_PASSWORD: dev_pass
+            POSTGRES_DB: hubspot_dev
+        volumes:
+            - postgres-data:/var/lib/postgresql
+
     minio:
         image: minio/minio:latest
         container_name: hubspot-service-minio
@@ -35,4 +46,5 @@ services:
             KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
 volumes:
+    postgres-data:
     minio-data:
