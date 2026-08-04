@@ -17,9 +17,10 @@ class ExtractionService:
 
     Coordinates fetching records for one or more HubSpot object types via
     `HubSpotClient`, persisting per-object-type progress to `ScanRepository`
-    as it goes. Designed to be run in a background thread — `start_scan`
+    as it goes. Designed to be run in a background thread - `start_scan_async`
     does not return a result; callers poll persisted scan state instead
-    (e.g. via `GET /api/scan/{id}/status`).
+    (e.g. via `GET /api/scan/{id}/status`). Supports cooperative
+    cancellation via `cancel_scan`.
     """
 
     def __init__(
@@ -58,6 +59,8 @@ class ExtractionService:
         self._client = client
         self._scans = scans
         self._environment = environment
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._cancel_events_lock = threading.Lock()
 
     def validate_scan_params(
         self,
@@ -66,20 +69,13 @@ class ExtractionService:
     ) -> None:
         """Validates scan parameters that must fail synchronously.
 
-        Call this in the request-handling thread, before starting a scan
-        in the background — errors here (bad output_format, unsupported
-        destinations) need to reach the caller as an HTTP error response,
-        which isn't possible once `start_scan` is running in its own
-        thread after the request has already returned 202.
-
         Args:
             output_format: The requested output format, if any.
             destination: The requested destination config, if any.
 
         Raises:
             ValueError: If `output_format` is set but unsupported.
-            NotImplementedError: If `destination.clickhouse_load` is set
-                (not yet implemented).
+            NotImplementedError: If `destination.clickhouse_load` is set.
         """
         destination = destination or {}
         if destination.get("clickhouse_load", False):
@@ -104,19 +100,16 @@ class ExtractionService:
     ) -> threading.Thread:
         """Starts a scan in a background thread and returns immediately.
 
-        Assumes `validate_scan_params` has already been called
-        successfully - this method does not re-validate `output_format`/
-        `destination` and will raise inside the background thread (only
-        visible in logs, not to any HTTP caller) if given invalid values.
+        Registers a cancel event for this scan before starting the
+        thread, so `cancel_scan` can be called safely even if it races
+        with the thread's own startup.
 
         Args:
             scan_id: Identifier for this scan. Must already exist as a
-                persisted scan (via `ScanRepository.create`) before
-                calling this.
+                persisted scan (via `ScanRepository.create`).
             org_id: Organization identifier.
             object_types: HubSpot object types to scan.
-            properties_by_object: Property names to request per object
-                type.
+            properties_by_object: Property names to request per object type.
             associations_by_object: Associated object types to request
                 per object type.
             last_modified_after_ms: If set, restricts every object type
@@ -126,10 +119,11 @@ class ExtractionService:
             destination: Controls where extracted data is sent.
 
         Returns:
-            The started (daemon) thread. Callers generally don't need to
-            join it - progress is observed via `ScanRepository`, not the
-            thread's return value.
+            The started (daemon) thread.
         """
+        with self._cancel_events_lock:
+            self._cancel_events[scan_id] = threading.Event()
+
         thread = threading.Thread(
             target=self._run_scan,
             kwargs={
@@ -147,6 +141,31 @@ class ExtractionService:
         thread.start()
         return thread
 
+    def cancel_scan(self, scan_id: str) -> bool:
+        """Requests cancellation of an in-progress scan.
+
+        This is cooperative, not immediate - the running thread notices
+        the request the next time it checks between object types (or,
+        for the object type currently mid-fetch, after its current page
+        finishes). Object types already complete are unaffected; object
+        types not yet started are marked "cancelled" rather than fetched.
+
+        Args:
+            scan_id: The scan to cancel.
+
+        Returns:
+            True if a cancel signal was sent (the scan was found and
+            still tracked as running); False if no running scan with
+            that ID was found (e.g. it already finished, or never
+            existed).
+        """
+        with self._cancel_events_lock:
+            event = self._cancel_events.get(scan_id)
+        if event is None:
+            return False
+        event.set()
+        return True
+
     def _run_scan(
         self,
         scan_id: str,
@@ -160,10 +179,10 @@ class ExtractionService:
     ) -> None:
         """Runs an extraction scan, persisting progress as it goes.
 
-        This is the actual work `start_scan_async` runs in a background
-        thread. Each object type is handled independently - a failure on
-        one type is persisted as that type's failure and does not stop
-        the remaining types from being scanned.
+        Checks the scan's cancel event before starting each object type;
+        if set, remaining (not-yet-started) object types are marked
+        "cancelled" instead of being fetched. Cleans up the cancel event
+        when the scan finishes, regardless of outcome.
         """
         destination = destination or {}
         upload_to_minio = "minio_bucket" in destination
@@ -174,101 +193,126 @@ class ExtractionService:
             "parquet": self._normalizer.to_parquet,
         }
 
+        with self._cancel_events_lock:
+            cancel_event = self._cancel_events.get(scan_id, threading.Event())
+
         self._scans.update_status(scan_id, "in_progress")
 
-        for object_type in object_types:
-            try:
-                record_count = 0
-                uploaded_keys: list[str] = []
-                page_num = 0
-                for page_num, page in enumerate(
-                    self._client.iter_objects(
-                        object_type,
-                        properties_by_object.get(object_type, []),
-                        associations=associations_by_object.get(object_type, []),
-                        last_modified_after_ms=last_modified_after_ms,
-                    ),
-                    start=1,
-                ):
-                    record_count += len(page)
+        try:
+            for object_type in object_types:
+                if cancel_event.is_set():
+                    self._scans.update_object_progress(
+                        scan_id, object_type, {"status": "cancelled"}
+                    )
+                    continue
 
-                    if output_format is not None and upload_to_minio:
-                        normalize = normalizers[output_format]
-                        data = normalize(page)
-                        key = self._minio.upload(
-                            data=data,
+                try:
+                    record_count = 0
+                    uploaded_keys: list[str] = []
+                    page_num = 0
+                    for page_num, page in enumerate(
+                        self._client.iter_objects(
+                            object_type,
+                            properties_by_object.get(object_type, []),
+                            associations=associations_by_object.get(object_type, []),
+                            last_modified_after_ms=last_modified_after_ms,
+                        ),
+                        start=1,
+                    ):
+                        record_count += len(page)
+
+                        if output_format is not None and upload_to_minio:
+                            normalize = normalizers[output_format]
+                            data = normalize(page)
+                            key = self._minio.upload(
+                                data=data,
+                                org_id=org_id,
+                                scan_id=scan_id,
+                                object_type=object_type,
+                                page=page_num,
+                                output_format=output_format,
+                            )
+                            if key is not None:
+                                uploaded_keys.append(key)
+
+                        if publish_to_kafka:
+                            self._publish_page(
+                                object_type, org_id, scan_id, page_num, page
+                            )
+
+                        if cancel_event.is_set():
+                            # Stop mid-object-type too - don't finish
+                            # fetching remaining pages once cancelled.
+                            break
+
+                    if output_format is not None and upload_to_minio and page_num > 0:
+                        metadata_key = self._upload_metadata(
                             org_id=org_id,
                             scan_id=scan_id,
                             object_type=object_type,
-                            page=page_num,
-                            output_format=output_format,
+                            total_records=record_count,
+                            pages=page_num,
+                            last_modified_after_ms=last_modified_after_ms,
                         )
-                        if key is not None:
-                            uploaded_keys.append(key)
+                        if metadata_key is not None:
+                            uploaded_keys.append(metadata_key)
 
-                    if publish_to_kafka:
-                        self._publish_page(object_type, org_id, scan_id, page_num, page)
-
-                if output_format is not None and upload_to_minio and page_num > 0:
-                    metadata_key = self._upload_metadata(
-                        org_id=org_id,
-                        scan_id=scan_id,
-                        object_type=object_type,
-                        total_records=record_count,
-                        pages=page_num,
-                        last_modified_after_ms=last_modified_after_ms,
+                    status = "cancelled" if cancel_event.is_set() else "complete"
+                    self._scans.update_object_progress(
+                        scan_id,
+                        object_type,
+                        {
+                            "status": status,
+                            "records_extracted": record_count,
+                            "pages_downloaded": page_num,
+                            "associations_fetched": bool(
+                                associations_by_object.get(object_type)
+                            ),
+                            "minio_path": (
+                                f"s3://{destination.get('minio_bucket')}/{org_id}/{scan_id}/{object_type}/"
+                                if upload_to_minio
+                                else None
+                            ),
+                        },
                     )
-                    if metadata_key is not None:
-                        uploaded_keys.append(metadata_key)
+                except HubSpotClientError as e:
+                    logger.warning(f"Failed to scan {object_type}: {e}")
+                    self._scans.update_object_progress(
+                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                    )
+                except MinioClientError as e:
+                    logger.warning(f"Failed to upload {object_type} data: {e}")
+                    self._scans.update_object_progress(
+                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                    )
+                except KeyError as e:
+                    logger.warning(f"No Kafka topic configured for {object_type}: {e}")
+                    self._scans.update_object_progress(
+                        scan_id,
+                        object_type,
+                        {
+                            "status": "failed",
+                            "error": f"No Kafka topic configured for object type {object_type!r}",
+                        },
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to scan {object_type}: {e}")
+                    self._scans.update_object_progress(
+                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                    )
 
-                self._scans.update_object_progress(
-                    scan_id,
-                    object_type,
-                    {
-                        "status": "complete",
-                        "records_extracted": record_count,
-                        "pages_downloaded": page_num,
-                        "associations_fetched": bool(
-                            associations_by_object.get(object_type)
-                        ),
-                        "minio_path": (
-                            f"s3://{destination.get('minio_bucket')}/{org_id}/{scan_id}/{object_type}/"
-                            if upload_to_minio
-                            else None
-                        ),
-                    },
-                )
-            except HubSpotClientError as e:
-                logger.warning(f"Failed to scan {object_type}: {e}")
-                self._scans.update_object_progress(
-                    scan_id, object_type, {"status": "failed", "error": str(e)}
-                )
-            except MinioClientError as e:
-                logger.warning(f"Failed to upload {object_type} data: {e}")
-                self._scans.update_object_progress(
-                    scan_id, object_type, {"status": "failed", "error": str(e)}
-                )
-            except KeyError as e:
-                logger.warning(f"No Kafka topic configured for {object_type}: {e}")
-                self._scans.update_object_progress(
-                    scan_id,
-                    object_type,
-                    {
-                        "status": "failed",
-                        "error": f"No Kafka topic configured for object type {object_type!r}",
-                    },
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"Failed to scan {object_type}: {e}")
-                self._scans.update_object_progress(
-                    scan_id, object_type, {"status": "failed", "error": str(e)}
-                )
-
-        final_scan = self._scans.get(scan_id)
-        any_failed = any(
-            entry.get("status") == "failed" for entry in final_scan.progress.values()
-        )
-        self._scans.update_status(scan_id, "failed" if any_failed else "completed")
+            final_scan = self._scans.get(scan_id)
+            statuses = {entry.get("status") for entry in final_scan.progress.values()}
+            if cancel_event.is_set():
+                final_status = "cancelled"
+            elif "failed" in statuses:
+                final_status = "failed"
+            else:
+                final_status = "completed"
+            self._scans.update_status(scan_id, final_status)
+        finally:
+            with self._cancel_events_lock:
+                self._cancel_events.pop(scan_id, None)
 
     def _publish_page(
         self,

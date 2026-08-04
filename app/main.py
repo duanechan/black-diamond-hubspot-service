@@ -1,12 +1,12 @@
 from flask import Flask
 from flask_restx.api import Api
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.auth.hubspot_auth import HubSpotAuth
 from app.clients.hubspot_client import HubSpotClient
 from app.config import Settings, validate_settings
+from app.db import create_db_engine, create_session_factory
 from app.logger import logger, werkzeug_logger
+from app.models.base import Base
 from app.repositories.scan_repository import ScanRepository
 from app.routes.batch import batch_ns
 from app.routes.health import health_ns
@@ -45,13 +45,18 @@ def create_app(settings: Settings) -> Flask:
         include_associations=settings.HUBSPOT_INCLUDE_ASSOCIATIONS,
     )
     app.extensions["client"].validate_auth()
-    app.extensions["scans"] = ScanRepository(
-        sessionmaker(
-            bind=create_engine(
-                f"postgresql://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-            )
-        )
+
+    engine = create_db_engine(
+        host=settings.DB_HOST,
+        port=settings.DB_PORT,
+        name=settings.DB_NAME,
+        user=settings.DB_USER,
+        password=settings.DB_PASSWORD.get_secret_value(),
+        schema=settings.DB_SCHEMA,
     )
+    Base.metadata.create_all(engine)
+    app.extensions["scans"] = ScanRepository(create_session_factory(engine))
+
     app.extensions["extraction_service"] = ExtractionService(
         normalizer=NormalizationService(),
         minio=MinioClient(

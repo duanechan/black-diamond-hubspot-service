@@ -7,6 +7,7 @@ from flask_restx import Namespace, Resource, fields
 from app.auth.hmac_auth import require_hmac
 from app.config import Settings
 from app.constants import SUPPORTED_OBJECTS
+from app.repositories.scan_repository import ScanNotFoundError
 from app.services.extraction_service import ExtractionService
 
 scan_ns = Namespace("scan", description="Scan operations")
@@ -171,3 +172,144 @@ def build_validation_errors(missing_fields: list[str]) -> dict[str, dict[str, st
         field: FIELD_ERRORS.get(field, {"error": "Unknown error"})
         for field in missing_fields
     }
+
+
+@scan_ns.route("/<string:scan_id>/status")
+class Status(Resource):
+    @require_hmac()
+    def get(self, scan_id: str):
+        scans = current_app.extensions["scans"]
+        try:
+            scan = scans.get(scan_id)
+        except ScanNotFoundError:
+            return {"error": f"Scan '{scan_id}' not found"}, 404
+
+        totals = {
+            "objects_total": len(scan.progress),
+            "objects_complete": sum(
+                1 for e in scan.progress.values() if e.get("status") == "complete"
+            ),
+            "objects_failed": sum(
+                1 for e in scan.progress.values() if e.get("status") == "failed"
+            ),
+            "records_extracted": sum(
+                e.get("records_extracted", 0) for e in scan.progress.values()
+            ),
+        }
+
+        return {
+            "scan_id": scan.scan_id,
+            "org_id": scan.org_id,
+            "status": scan.status,
+            "started_at": scan.started_at.isoformat(),
+            "updated_at": scan.updated_at.isoformat(),
+            "progress": scan.progress,
+            "totals": totals,
+        }, 200
+
+
+@scan_ns.route("/<string:scan_id>/cancel")
+class Cancel(Resource):
+    @require_hmac()
+    def post(self, scan_id: str):
+        scans = current_app.extensions["scans"]
+        es: ExtractionService = current_app.extensions["extraction_service"]
+
+        try:
+            scan = scans.get(scan_id)
+        except ScanNotFoundError:
+            return {"error": f"Scan '{scan_id}' not found"}, 404
+
+        already_complete = [
+            object_type
+            for object_type, entry in scan.progress.items()
+            if entry.get("status") == "complete"
+        ]
+
+        cancelled = es.cancel_scan(scan_id)
+        if not cancelled:
+            return {
+                "success": False,
+                "scan_id": scan_id,
+                "status": scan.status,
+                "message": "Scan is not currently running (already finished or not found).",
+            }, 400
+
+        pending = [ot for ot in scan.progress if ot not in already_complete]
+
+        return {
+            "success": True,
+            "scan_id": scan_id,
+            "status": "cancelled",
+            "objects_cancelled": pending,
+            "objects_already_complete": already_complete,
+            "message": (
+                f"Scan cancelled. {len(already_complete)} object(s) "
+                f"({', '.join(already_complete) or 'none'}) completed before cancellation."
+            ),
+        }, 200
+
+
+@scan_ns.route("/list")
+class List(Resource):
+    @require_hmac()
+    def get(self):
+        scans_repo = current_app.extensions["scans"]
+        org_id = request.args.get("org_id")
+        status = request.args.get("status")
+
+        scans = scans_repo.list(org_id=org_id, status=status)
+
+        return {
+            "scans": [
+                {
+                    "scan_id": scan.scan_id,
+                    "org_id": scan.org_id,
+                    "status": scan.status,
+                    "started_at": scan.started_at.isoformat(),
+                    "updated_at": scan.updated_at.isoformat(),
+                }
+                for scan in scans
+            ],
+            "count": len(scans),
+        }, 200
+
+
+@scan_ns.route("/<string:scan_id>/remove")
+class Remove(Resource):
+    @require_hmac()
+    def delete(self, scan_id: str):
+        scans_repo = current_app.extensions["scans"]
+        try:
+            scans_repo.delete(scan_id)
+        except ScanNotFoundError:
+            return {"error": f"Scan '{scan_id}' not found"}, 404
+
+        return {
+            "success": True,
+            "scan_id": scan_id,
+            "message": "Scan record removed.",
+        }, 200
+
+
+@scan_ns.route("/statistics")
+class Statistics(Resource):
+    @require_hmac()
+    def get(self):
+        scans_repo = current_app.extensions["scans"]
+        org_id = request.args.get("org_id")
+        all_scans = scans_repo.list(org_id=org_id)
+
+        by_status: dict[str, int] = {}
+        total_records = 0
+        for scan in all_scans:
+            by_status[scan.status] = by_status.get(scan.status, 0) + 1
+            total_records += sum(
+                entry.get("records_extracted", 0) for entry in scan.progress.values()
+            )
+
+        return {
+            "total_scans": len(all_scans),
+            "by_status": by_status,
+            "total_records_extracted": total_records,
+        }, 200
