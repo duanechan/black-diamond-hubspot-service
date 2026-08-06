@@ -11,11 +11,13 @@ from app.repositories.scan_repository import ScanRepository
 from app.routes.batch import batch_ns
 from app.routes.health import health_ns
 from app.routes.key import key_ns
+from app.routes.maintenance import maintenance_ns
 from app.routes.objects import objects_ns
 from app.routes.scan import scan_ns
 from app.services.extraction_service import ExtractionService
 from app.services.normalization_service import NormalizationService
 from app.services.pii_service import PIIService
+from app.storage.clickhouse_client import ClickHouseClient
 from app.storage.kafka_producer import KafkaProducer
 from app.storage.minio_client import MinioClient
 
@@ -74,6 +76,14 @@ def create_app(settings: Settings) -> Flask:
             enabled=settings.PII_MASKING_ENABLED,
             hmac_key=settings.PII_HMAC_KEY.get_secret_value(),
         ),
+        clickhouse=ClickHouseClient(
+            enabled=settings.CLICKHOUSE_ENABLED,
+            host=settings.CLICKHOUSE_HOST,
+            port=settings.CLICKHOUSE_PORT,
+            user=settings.CLICKHOUSE_USER,
+            password=settings.CLICKHOUSE_PASSWORD.get_secret_value(),
+            database=settings.CLICKHOUSE_DATABASE,
+        ),
         client=app.extensions["client"],
         scans=app.extensions["scans"],
         environment=settings.ENVIRONMENT,
@@ -89,6 +99,7 @@ def create_app(settings: Settings) -> Flask:
     api.add_namespace(objects_ns, path="/api/objects")
     api.add_namespace(key_ns, path="/api/key")
     api.add_namespace(batch_ns, path="/api/batch")
+    api.add_namespace(maintenance_ns, path="/api/maintenance")
 
     return app
 

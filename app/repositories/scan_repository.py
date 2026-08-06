@@ -166,3 +166,28 @@ class ScanRepository:
                 raise ScanNotFoundError(scan_id)
             session.delete(scan)
             session.commit()
+
+    def delete_older_than(self, cutoff: datetime) -> int:
+        """Deletes scans started before the given cutoff.
+
+        Only deletes scans in a terminal state (completed, failed,
+        cancelled) - never touches "started"/"in_progress" scans,
+        regardless of age, since those may still have a live background
+        thread running against them.
+
+        Args:
+            cutoff: Scans started before this timestamp are deleted.
+
+        Returns:
+            The number of scans deleted.
+        """
+        terminal_statuses = ("completed", "failed", "cancelled")
+        with self._session_factory() as session:
+            query = session.query(Scan).filter(
+                Scan.started_at < cutoff,
+                Scan.status.in_(terminal_statuses),
+            )
+            count = query.count()
+            query.delete(synchronize_session=False)
+            session.commit()
+            return count

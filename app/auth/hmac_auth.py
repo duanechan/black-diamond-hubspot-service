@@ -10,7 +10,8 @@ from app.config import Settings
 
 
 def require_hmac(requires_engineer_key: bool = False):
-    """Require HMAC authentication for a Flask endpoint.
+    """
+    Require HMAC authentication for a Flask endpoint.
 
     When HMAC authentication is enabled, this decorator validates:
     1. The presence of the ``X-Timestamp`` and ``X-Signature`` headers.
@@ -18,7 +19,6 @@ def require_hmac(requires_engineer_key: bool = False):
     3. That the supplied HMAC signature matches the expected signature.
 
     The signature is computed using SHA-256 over the following payload:
-
     ```
     <HTTP_METHOD>
     <REQUEST_PATH>
@@ -79,9 +79,12 @@ def require_hmac(requires_engineer_key: bool = False):
                 if requires_engineer_key
                 else settings.HMAC_SECRET_KEY_CORE
             )
+            # full_path includes the query string (with a trailing "?" even
+            # when there's no query string, hence the rstrip).
+            signed_path = request.full_path.rstrip("?")
             expected = hmac.new(
                 key=key.get_secret_value().encode(),
-                msg=f"{request.method}\n{request.path}\n{timestamp}\n{request.get_data(as_text=True)}".encode(),
+                msg=f"{request.method}\n{signed_path}\n{timestamp}\n{request.get_data(as_text=True)}".encode(),
                 digestmod=hashlib.sha256,
             ).hexdigest()
 

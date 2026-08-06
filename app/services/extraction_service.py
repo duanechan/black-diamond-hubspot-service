@@ -8,6 +8,7 @@ from app.logger import logger
 from app.repositories.scan_repository import ScanRepository
 from app.services.normalization_service import NormalizationService
 from app.services.pii_service import PIIService
+from app.storage.clickhouse_client import ClickHouseClient, ClickHouseClientError
 from app.storage.kafka_producer import KafkaProducer
 from app.storage.minio_client import MinioClient, MinioClientError
 
@@ -29,6 +30,7 @@ class ExtractionService:
         minio: MinioClient,
         kafka: KafkaProducer,
         pii: PIIService,
+        clickhouse: ClickHouseClient,
         client: HubSpotClient,
         scans: ScanRepository,
         environment: str,
@@ -56,6 +58,7 @@ class ExtractionService:
         self._minio = minio
         self._kafka = kafka
         self._pii = pii
+        self._clickhouse = clickhouse
         self._client = client
         self._scans = scans
         self._environment = environment
@@ -75,12 +78,7 @@ class ExtractionService:
 
         Raises:
             ValueError: If `output_format` is set but unsupported.
-            NotImplementedError: If `destination.clickhouse_load` is set.
         """
-        destination = destination or {}
-        if destination.get("clickhouse_load", False):
-            raise NotImplementedError("ClickHouse loading is not yet implemented")
-
         valid_formats = {"json", "parquet"}
         if output_format is not None and output_format not in valid_formats:
             raise ValueError(
@@ -185,6 +183,7 @@ class ExtractionService:
         when the scan finishes, regardless of outcome.
         """
         destination = destination or {}
+        load_to_clickhouse = destination.get("clickhouse_load", False)
         upload_to_minio = "minio_bucket" in destination
         publish_to_kafka = destination.get("kafka_publish", False)
 
@@ -240,6 +239,9 @@ class ExtractionService:
                                 object_type, org_id, scan_id, page_num, page
                             )
 
+                        if load_to_clickhouse:
+                            self._clickhouse.insert_records(object_type, page)
+
                         if cancel_event.is_set():
                             # Stop mid-object-type too - don't finish
                             # fetching remaining pages once cancelled.
@@ -282,6 +284,13 @@ class ExtractionService:
                     )
                 except MinioClientError as e:
                     logger.warning(f"Failed to upload {object_type} data: {e}")
+                    self._scans.update_object_progress(
+                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                    )
+                except ClickHouseClientError as e:
+                    logger.warning(
+                        f"Failed to load {object_type} data into ClickHouse: {e}"
+                    )
                     self._scans.update_object_progress(
                         scan_id, object_type, {"status": "failed", "error": str(e)}
                     )

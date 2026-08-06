@@ -313,3 +313,91 @@ class Statistics(Resource):
             "by_status": by_status,
             "total_records_extracted": total_records,
         }, 200
+
+
+@scan_ns.route("/<string:scan_id>/resume")
+class Resume(Resource):
+    @require_hmac()
+    def post(self, scan_id: str):
+        settings: Settings = current_app.extensions["settings"]
+        scans = current_app.extensions["scans"]
+        es: ExtractionService = current_app.extensions["extraction_service"]
+
+        try:
+            scan = scans.get(scan_id)
+        except ScanNotFoundError:
+            return {"error": f"Scan '{scan_id}' not found"}, 404
+
+        if scan.status not in ("failed", "cancelled"):
+            return {
+                "success": False,
+                "scan_id": scan_id,
+                "status": scan.status,
+                "message": f"Scan is '{scan.status}', not failed or cancelled - nothing to resume.",
+            }, 400
+
+        config = scan.config
+        object_types = config.get("object_types", [])
+        incomplete_types = [
+            object_type
+            for object_type in object_types
+            if scan.progress.get(object_type, {}).get("status") != "complete"
+        ]
+
+        if len(incomplete_types) == 0:
+            return {
+                "success": False,
+                "scan_id": scan_id,
+                "status": scan.status,
+                "message": "All object types already completed - nothing to resume.",
+            }, 400
+
+        filters = config.get("filters", {})
+        output_format = config.get("output_format", "parquet")
+        destination = config.get("destination", {})
+        include_associations = config.get(
+            "include_associations", settings.HUBSPOT_INCLUDE_ASSOCIATIONS
+        )
+
+        last_modified_after = filters.get("last_modified_after")
+        last_modified_after_ms = (
+            int(datetime.fromisoformat(last_modified_after).timestamp() * 1000)
+            if last_modified_after is not None
+            else None
+        )
+
+        properties_by_object = {
+            object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
+                "default_properties", []
+            )
+            for object_type in incomplete_types
+        }
+        associations_by_object = {
+            object_type: SUPPORTED_OBJECTS.get(object_type, {}).get(
+                "association_targets", []
+            )
+            if include_associations
+            else []
+            for object_type in incomplete_types
+        }
+
+        scans.update_status(scan_id, "started")
+
+        es.start_scan_async(
+            scan_id=scan_id,
+            org_id=scan.org_id,
+            object_types=incomplete_types,
+            properties_by_object=properties_by_object,
+            associations_by_object=associations_by_object,
+            last_modified_after_ms=last_modified_after_ms,
+            output_format=output_format,
+            destination=destination,
+        )
+
+        return {
+            "success": True,
+            "scan_id": scan_id,
+            "status": "started",
+            "resumed_objects": incomplete_types,
+            "message": f"Resuming {len(incomplete_types)} incomplete object type(s).",
+        }, 202
