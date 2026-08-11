@@ -23,7 +23,7 @@ class HubSpotClientError(Exception):
 
 
 class HubSpotClient:
-    """Client for HubSpot API"""
+    """Client for HubSpot API."""
 
     def __init__(
         self,
@@ -63,34 +63,25 @@ class HubSpotClient:
         properties: list[str],
         associations: list[str] | None = None,
         last_modified_after_ms: int | None = None,
-    ) -> Iterator[list[dict]]:
-        """Iterates over pages of HubSpot CRM records for a given object type.
-
-        Uses the standard list endpoint for a full scan, or the Search API
-        (filtered on `lastmodifieddate`) when `last_modified_after_ms` is
-        given, for incremental scans. Follows cursor-based pagination
-        automatically, yielding one page (list of records) at a time.
+        after: str | None = None,
+    ) -> Iterator[tuple[str | None, list[dict]]]:
+        """Iterates over HubSpot objects with cursor checkpoint support.
 
         Args:
-            object_type: HubSpot object type to fetch (e.g. "contacts").
-            properties: Property names to include on each returned record.
-            associations: Object types to fetch associated record IDs for
-                (e.g. ["companies"]). Ignored entirely if the client was
-                constructed with `include_associations=False`.
-            last_modified_after_ms: If set, only returns records modified
-                at or after this Unix timestamp in milliseconds, using the
-                Search API instead of the list endpoint.
+            object_type: HubSpot object type (e.g. "contacts").
+            properties: Properties to request.
+            associations: Optional association types.
+            last_modified_after_ms: Incremental extraction timestamp.
+            after: Optional HubSpot paging cursor to resume from.
 
         Yields:
-            Each page's records, as plain dicts (converted from the SDK's
-            typed response objects). Empty pages are never yielded.
+            Tuples of (next_cursor, records).
 
-        Raises:
-            HubSpotClientError: If a request fails (wraps the underlying
-                ApiException).
+            `next_cursor` should be persisted only after the page has been
+            successfully processed. It will be None for the final page.
         """
-        after: str | None = None
         try:
+            current_after = after
             while True:
                 if last_modified_after_ms is None:
                     page = cast(
@@ -102,7 +93,7 @@ class HubSpotClient:
                             else [],
                             properties=properties,
                             limit=self._page_size,
-                            after=after,
+                            after=current_after,
                         ),
                     )
                 else:
@@ -115,10 +106,11 @@ class HubSpotClient:
                     search_request = PublicObjectSearchRequest(
                         properties=properties,
                         limit=self._page_size,
-                        after=after,
+                        after=current_after,
                         filter_groups=[filter_group],
                         sorts=["lastmodifieddate"],
                     )
+
                     page = cast(
                         CollectionResponseWithTotalSimplePublicObjectForwardPaging,
                         self._client.crm.objects.search_api.do_search(
@@ -131,16 +123,23 @@ class HubSpotClient:
                     )
 
                 results = [record.to_dict() for record in (page.results or [])]
-                if len(results) > 0:
-                    yield results
-                if page.paging is None or page.paging.next is None:
+                next_after: str | None = None
+                if page.paging is not None and page.paging.next is not None:
+                    next_after = page.paging.next.after
+
+                if results:
+                    yield next_after, results
+
+                if next_after is None:
                     break
-                after = page.paging.next.after
+
+                current_after = next_after
+
         except ApiException as e:
             logger.error(f"Failed to retrieve paginated-list of {object_type}: {e}")
             raise HubSpotClientError(
                 f"Failed to retrieve paginated-list of {object_type}: {e}"
-            )
+            ) from e
 
     def validate_auth(self) -> bool:
         """Validates the underlying access token against HubSpot.
@@ -196,7 +195,7 @@ class HubSpotClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
-            raise HubSpotClientError(f"Failed to fetch portal info: {e}")
+            raise HubSpotClientError(f"Failed to fetch portal info: {e}") from e
 
     def get_api_usage(self) -> dict:
         """Fetches current daily API usage and limits for this private app.
@@ -220,4 +219,4 @@ class HubSpotClient:
                 raise HubSpotClientError("No API usage data returned")
             return results[0]
         except requests.RequestException as e:
-            raise HubSpotClientError(f"Failed to fetch API usage: {e}")
+            raise HubSpotClientError(f"Failed to fetch API usage: {e}") from e

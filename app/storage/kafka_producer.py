@@ -24,6 +24,22 @@ class KafkaProducer:
         """
         self._producer = Producer({"bootstrap.servers": bootstrap_servers})
 
+    def ping(self) -> bool:
+        """Checks whether the Kafka cluster is reachable.
+
+        Never raises - failures are logged and reported as False,
+        matching `MinioClient.ping()`/`ClickHouseClient.ping()`.
+
+        Returns:
+            True if the cluster's metadata can be fetched; False otherwise.
+        """
+        try:
+            self._producer.list_topics(timeout=5.0)
+            return True
+        except Exception as e:
+            logger.warning(f"Kafka ping failed: {e}")
+            return False
+
     def produce(self, topic: str, value: bytes, key: str | None = None) -> None:
         """Buffers a message for publishing to a Kafka topic.
 

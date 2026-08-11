@@ -107,7 +107,7 @@ class ClickHouseClient:
         ]
 
         table = object_type
-        columns = list(flattened[0].keys())
+        columns = list({key for row in flattened for key in row})
 
         try:
             self._ensure_table(table, columns)
@@ -121,20 +121,33 @@ class ClickHouseClient:
         return len(flattened)
 
     def _ensure_table(self, table: str, columns: list[str]) -> None:
-        """Creates a table if it doesn't already exist.
+        """Creates a table if it doesn't already exist, and adds any of
+        `columns` it's missing.
 
         All columns are created as String - HubSpot property values
         arrive as strings from the API in practice, and this avoids
         needing to infer/reconcile types across records that may have
         differently-shaped properties.
 
+        Different pages (or different records within the same page) can
+        have different sets of properties, so this doesn't assume the
+        table's shape was already settled by an earlier page - `id` is
+        the only column guaranteed to exist on first creation (needed
+        for `ORDER BY id`), and any other column is added on demand,
+        idempotently, whichever page first introduces it.
+
         Args:
             table: Table name.
-            columns: Column names to create.
+            columns: Column names that must exist on the table.
         """
         assert self._client is not None
-        column_defs = ", ".join(f"`{col}` String" for col in columns)
         self._client.command(
-            f"CREATE TABLE IF NOT EXISTS `{table}` ({column_defs}) "
+            f"CREATE TABLE IF NOT EXISTS `{table}` (`id` String) "
             f"ENGINE = MergeTree() ORDER BY id"
         )
+        for col in columns:
+            if col == "id":
+                continue
+            self._client.command(
+                f"ALTER TABLE `{table}` ADD COLUMN IF NOT EXISTS `{col}` String"
+            )

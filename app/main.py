@@ -57,33 +57,36 @@ def create_app(settings: Settings) -> Flask:
         schema=settings.DB_SCHEMA,
     )
     Base.metadata.create_all(engine)
-    app.extensions["scans"] = ScanRepository(create_session_factory(engine))
 
+    app.extensions["scans"] = ScanRepository(create_session_factory(engine))
+    app.extensions["minio"] = MinioClient(
+        enabled=settings.MINIO_ENABLED,
+        endpoint=settings.MINIO_ENDPOINT,
+        access_key=settings.MINIO_ACCESS_KEY.get_secret_value(),
+        secret_key=settings.MINIO_SECRET_KEY.get_secret_value(),
+        secure=settings.MINIO_SECURE,
+        bucket=settings.MINIO_BUCKET,
+    )
+    app.extensions["kafka"] = KafkaProducer(
+        bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+    )
+    app.extensions["clickhouse"] = ClickHouseClient(
+        enabled=settings.CLICKHOUSE_ENABLED,
+        host=settings.CLICKHOUSE_HOST,
+        port=settings.CLICKHOUSE_PORT,
+        user=settings.CLICKHOUSE_USER,
+        password=settings.CLICKHOUSE_PASSWORD.get_secret_value(),
+        database=settings.CLICKHOUSE_DATABASE,
+    )
     app.extensions["extraction_service"] = ExtractionService(
         normalizer=NormalizationService(),
-        minio=MinioClient(
-            enabled=settings.MINIO_ENABLED,
-            endpoint=settings.MINIO_ENDPOINT,
-            access_key=settings.MINIO_ACCESS_KEY.get_secret_value(),
-            secret_key=settings.MINIO_SECRET_KEY.get_secret_value(),
-            secure=settings.MINIO_SECURE,
-            bucket=settings.MINIO_BUCKET,
-        ),
-        kafka=KafkaProducer(
-            bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
-        ),
+        minio=app.extensions["minio"],
+        kafka=app.extensions["kafka"],
         pii=PIIService(
             enabled=settings.PII_MASKING_ENABLED,
             hmac_key=settings.PII_HMAC_KEY.get_secret_value(),
         ),
-        clickhouse=ClickHouseClient(
-            enabled=settings.CLICKHOUSE_ENABLED,
-            host=settings.CLICKHOUSE_HOST,
-            port=settings.CLICKHOUSE_PORT,
-            user=settings.CLICKHOUSE_USER,
-            password=settings.CLICKHOUSE_PASSWORD.get_secret_value(),
-            database=settings.CLICKHOUSE_DATABASE,
-        ),
+        clickhouse=app.extensions["clickhouse"],
         client=app.extensions["client"],
         scans=app.extensions["scans"],
         environment=settings.ENVIRONMENT,

@@ -209,7 +209,7 @@ class ExtractionService:
                     record_count = 0
                     uploaded_keys: list[str] = []
                     page_num = 0
-                    for page_num, page in enumerate(
+                    for page_num, (_next_after, page) in enumerate(
                         self._client.iter_objects(
                             object_type,
                             properties_by_object.get(object_type, []),
