@@ -380,6 +380,10 @@ class Resume(Resource):
             else []
             for object_type in incomplete_types
         }
+        after_by_object = {
+            object_type: scan.progress.get(object_type, {}).get("cursor")
+            for object_type in incomplete_types
+        }
 
         scans.update_status(scan_id, "started")
 
@@ -392,6 +396,7 @@ class Resume(Resource):
             last_modified_after_ms=last_modified_after_ms,
             output_format=output_format,
             destination=destination,
+            after_by_object=after_by_object,
         )
 
         return {

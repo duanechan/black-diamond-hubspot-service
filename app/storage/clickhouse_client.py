@@ -1,3 +1,5 @@
+import json
+
 import clickhouse_connect
 
 from app.logger import logger
@@ -102,7 +104,15 @@ class ClickHouseClient:
         assert self._client is not None
 
         flattened = [
-            {"id": record.get("id"), **record.get("properties", {})}
+            {
+                "id": record.get("id"),
+                **record.get("properties", {}),
+                "associations": (
+                    json.dumps(record["associations"])
+                    if record.get("associations")
+                    else ""
+                ),
+            }
             for record in records
         ]
 

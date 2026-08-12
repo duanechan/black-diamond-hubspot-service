@@ -1,3 +1,4 @@
+import json
 from io import BytesIO
 
 import pyarrow as pa
@@ -35,6 +36,9 @@ class NormalizationService:
         columns (e.g. `properties.email` becomes column `email`) so the
         resulting schema is flat and directly queryable, rather than
         nesting every HubSpot property under one struct column.
+        `associations`, when present, is kept as a single JSON-string
+        column rather than flattened, since its shape (which object
+        types it links to) varies per record.
 
         Args:
             records: Records to serialize, as returned by
@@ -47,11 +51,17 @@ class NormalizationService:
         Raises:
             ValueError: If the records cannot be converted to Parquet.
         """
+
         try:
             flattened = [
                 {
                     "id": record.get("id"),
                     **record.get("properties", {}),
+                    "associations": (
+                        json.dumps(record["associations"])
+                        if record.get("associations")
+                        else None
+                    ),
                 }
                 for record in records
             ]

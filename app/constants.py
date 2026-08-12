@@ -50,4 +50,17 @@ SUPPORTED_OBJECTS: dict[str, dict] = {
         "supports_associations": True,
         "association_targets": ["contacts", "companies"],
     },
+    "leads": {
+        "label": "Leads",
+        "api_endpoint": "/crm/v3/objects/leads",
+        "default_properties": [
+            "hs_lead_name",
+            "hs_lead_type",
+            "hs_lead_label",
+            "lastmodifieddate",
+        ],
+        "supports_incremental": True,
+        "supports_associations": True,
+        "association_targets": ["contacts"],
+    },
 }

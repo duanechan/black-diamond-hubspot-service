@@ -95,6 +95,7 @@ class ExtractionService:
         last_modified_after_ms: int | None = None,
         output_format: str | None = None,
         destination: dict | None = None,
+        after_by_object: dict[str, str | None] | None = None,
     ) -> threading.Thread:
         """Starts a scan in a background thread and returns immediately.
 
@@ -115,6 +116,10 @@ class ExtractionService:
             output_format: If set, each fetched page is normalized and
                 uploaded to MinIO.
             destination: Controls where extracted data is sent.
+            after_by_object: Per-object-type HubSpot paging cursor to
+                resume from, as persisted in a prior run's
+                `progress[object_type]["cursor"]`. Omitted or None for
+                an object type means start from page 1.
 
         Returns:
             The started (daemon) thread.
@@ -133,6 +138,7 @@ class ExtractionService:
                 "last_modified_after_ms": last_modified_after_ms,
                 "output_format": output_format,
                 "destination": destination,
+                "after_by_object": after_by_object or {},
             },
             daemon=True,
         )
@@ -174,6 +180,7 @@ class ExtractionService:
         last_modified_after_ms: int | None,
         output_format: str | None,
         destination: dict | None,
+        after_by_object: dict[str, str | None] | None = None,
     ) -> None:
         """Runs an extraction scan, persisting progress as it goes.
 
@@ -181,8 +188,15 @@ class ExtractionService:
         if set, remaining (not-yet-started) object types are marked
         "cancelled" instead of being fetched. Cleans up the cancel event
         when the scan finishes, regardless of outcome.
+
+        Progress (including the HubSpot paging cursor) is persisted
+        after every page - not just once the object type finishes - so
+        an interrupted scan can be resumed from its last completed page
+        via `after_by_object`, rather than restarting that object type
+        from page 1.
         """
         destination = destination or {}
+        after_by_object = after_by_object or {}
         load_to_clickhouse = destination.get("clickhouse_load", False)
         upload_to_minio = "minio_bucket" in destination
         publish_to_kafka = destination.get("kafka_publish", False)
@@ -200,24 +214,41 @@ class ExtractionService:
         try:
             for object_type in object_types:
                 if cancel_event.is_set():
+                    prior_progress = self._scans.get(scan_id).progress.get(
+                        object_type, {}
+                    )
                     self._scans.update_object_progress(
-                        scan_id, object_type, {"status": "cancelled"}
+                        scan_id, object_type, {**prior_progress, "status": "cancelled"}
                     )
                     continue
 
+                record_count = 0
+                page_num = 0
+                last_cursor: str | None = None
+
                 try:
-                    record_count = 0
                     uploaded_keys: list[str] = []
-                    page_num = 0
-                    for page_num, (_next_after, page) in enumerate(
+                    pages_this_run = 0
+
+                    prior_progress = self._scans.get(scan_id).progress.get(
+                        object_type, {}
+                    )
+                    record_count = prior_progress.get("records_extracted", 0)
+                    page_num = prior_progress.get("pages_downloaded", 0)
+                    last_cursor = prior_progress.get("cursor")
+
+                    for _page_offset, (next_after, page) in enumerate(
                         self._client.iter_objects(
                             object_type,
                             properties_by_object.get(object_type, []),
                             associations=associations_by_object.get(object_type, []),
                             last_modified_after_ms=last_modified_after_ms,
+                            after=after_by_object.get(object_type),
                         ),
                         start=1,
                     ):
+                        page_num += 1
+                        pages_this_run += 1
                         record_count += len(page)
 
                         if output_format is not None and upload_to_minio:
@@ -242,12 +273,34 @@ class ExtractionService:
                         if load_to_clickhouse:
                             self._clickhouse.insert_records(object_type, page)
 
+                        # Only persist the cursor once the page has been
+                        # fully processed by every requested destination -
+                        # this is what makes /resume safe to restart from.
+                        last_cursor = next_after
+                        self._scans.update_object_progress(
+                            scan_id,
+                            object_type,
+                            {
+                                "status": "in_progress",
+                                "records_extracted": record_count,
+                                "pages_downloaded": page_num,
+                                "cursor": last_cursor,
+                                "associations_fetched": bool(
+                                    associations_by_object.get(object_type)
+                                ),
+                            },
+                        )
+
                         if cancel_event.is_set():
                             # Stop mid-object-type too - don't finish
                             # fetching remaining pages once cancelled.
                             break
 
-                    if output_format is not None and upload_to_minio and page_num > 0:
+                    if (
+                        output_format is not None
+                        and upload_to_minio
+                        and pages_this_run > 0
+                    ):
                         metadata_key = self._upload_metadata(
                             org_id=org_id,
                             scan_id=scan_id,
@@ -267,6 +320,7 @@ class ExtractionService:
                             "status": status,
                             "records_extracted": record_count,
                             "pages_downloaded": page_num,
+                            "cursor": last_cursor,
                             "associations_fetched": bool(
                                 associations_by_object.get(object_type)
                             ),
@@ -280,19 +334,43 @@ class ExtractionService:
                 except HubSpotClientError as e:
                     logger.warning(f"Failed to scan {object_type}: {e}")
                     self._scans.update_object_progress(
-                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                        scan_id,
+                        object_type,
+                        {
+                            "status": "failed",
+                            "error": str(e),
+                            "records_extracted": record_count,
+                            "pages_downloaded": page_num,
+                            "cursor": last_cursor,
+                        },
                     )
                 except MinioClientError as e:
                     logger.warning(f"Failed to upload {object_type} data: {e}")
                     self._scans.update_object_progress(
-                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                        scan_id,
+                        object_type,
+                        {
+                            "status": "failed",
+                            "error": str(e),
+                            "records_extracted": record_count,
+                            "pages_downloaded": page_num,
+                            "cursor": last_cursor,
+                        },
                     )
                 except ClickHouseClientError as e:
                     logger.warning(
                         f"Failed to load {object_type} data into ClickHouse: {e}"
                     )
                     self._scans.update_object_progress(
-                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                        scan_id,
+                        object_type,
+                        {
+                            "status": "failed",
+                            "error": str(e),
+                            "records_extracted": record_count,
+                            "pages_downloaded": page_num,
+                            "cursor": last_cursor,
+                        },
                     )
                 except KeyError as e:
                     logger.warning(f"No Kafka topic configured for {object_type}: {e}")
@@ -302,12 +380,23 @@ class ExtractionService:
                         {
                             "status": "failed",
                             "error": f"No Kafka topic configured for object type {object_type!r}",
+                            "records_extracted": record_count,
+                            "pages_downloaded": page_num,
+                            "cursor": last_cursor,
                         },
                     )
                 except Exception as e:
                     logger.error(f"Failed to scan {object_type}: {e}")
                     self._scans.update_object_progress(
-                        scan_id, object_type, {"status": "failed", "error": str(e)}
+                        scan_id,
+                        object_type,
+                        {
+                            "status": "failed",
+                            "error": str(e),
+                            "records_extracted": record_count,
+                            "pages_downloaded": page_num,
+                            "cursor": last_cursor,
+                        },
                     )
 
             final_scan = self._scans.get(scan_id)

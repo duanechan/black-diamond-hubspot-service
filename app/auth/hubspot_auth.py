@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 import requests
 
@@ -33,7 +32,7 @@ class HubSpotAuth:
         self._portal_id = portal_id
         self._request_timeout = 10
         self._is_authenticated = False
-        self._last_validated_at: Optional[datetime] = None
+        self._last_validated_at: datetime | None = None
 
     @property
     def access_token(self) -> str:
@@ -115,7 +114,7 @@ class HubSpotAuth:
         last_validated_at = self._last_validated_at
         if not self._is_authenticated or last_validated_at is None:
             return False
-        age = datetime.now(timezone.utc) - last_validated_at
+        age = datetime.now(UTC) - last_validated_at
         return age <= timedelta(seconds=max_age_seconds)
 
     def _set_authenticated(self, is_authenticated: bool) -> None:
@@ -131,4 +130,4 @@ class HubSpotAuth:
                 succeeded.
         """
         self._is_authenticated = is_authenticated
-        self._last_validated_at = datetime.now(timezone.utc)
+        self._last_validated_at = datetime.now(UTC)
