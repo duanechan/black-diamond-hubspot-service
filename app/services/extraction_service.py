@@ -225,6 +225,7 @@ class ExtractionService:
                 record_count = 0
                 page_num = 0
                 last_cursor: str | None = None
+                associations_fetched = False
 
                 try:
                     uploaded_keys: list[str] = []
@@ -236,16 +237,36 @@ class ExtractionService:
                     record_count = prior_progress.get("records_extracted", 0)
                     page_num = prior_progress.get("pages_downloaded", 0)
                     last_cursor = prior_progress.get("cursor")
+                    associations_fetched = prior_progress.get(
+                        "associations_fetched", False
+                    )
 
-                    for _page_offset, (next_after, page) in enumerate(
-                        self._client.iter_objects(
+                    if object_type == "owners":
+                        # Owners use a dedicated API with no
+                        # properties/associations model and no
+                        # incremental (last_modified_after_ms) or
+                        # search-based filtering support.
+                        page_iterator = self._client.iter_owners(
+                            after=after_by_object.get(object_type)
+                        )
+                    elif object_type == "engagements":
+                        # Engagements use the legacy v1 API - no
+                        # properties model, no incremental filtering,
+                        # and offset-based (not cursor-based) paging.
+                        page_iterator = self._client.iter_engagements(
+                            after=after_by_object.get(object_type)
+                        )
+                    else:
+                        page_iterator = self._client.iter_objects(
                             object_type,
                             properties_by_object.get(object_type, []),
                             associations=associations_by_object.get(object_type, []),
                             last_modified_after_ms=last_modified_after_ms,
                             after=after_by_object.get(object_type),
-                        ),
-                        start=1,
+                        )
+
+                    for _page_offset, (next_after, page) in enumerate(
+                        page_iterator, start=1
                     ):
                         page_num += 1
                         pages_this_run += 1
@@ -273,6 +294,15 @@ class ExtractionService:
                         if load_to_clickhouse:
                             self._clickhouse.insert_records(object_type, page)
 
+                        # Reflects data actually seen on the wire, not
+                        # just whether associations were requested -
+                        # HubSpot can return no associations for a page
+                        # even when they were asked for (e.g. none of
+                        # these records have any).
+                        associations_fetched = associations_fetched or any(
+                            record.get("associations") for record in page
+                        )
+
                         # Only persist the cursor once the page has been
                         # fully processed by every requested destination -
                         # this is what makes /resume safe to restart from.
@@ -285,9 +315,7 @@ class ExtractionService:
                                 "records_extracted": record_count,
                                 "pages_downloaded": page_num,
                                 "cursor": last_cursor,
-                                "associations_fetched": bool(
-                                    associations_by_object.get(object_type)
-                                ),
+                                "associations_fetched": associations_fetched,
                             },
                         )
 
@@ -321,9 +349,7 @@ class ExtractionService:
                             "records_extracted": record_count,
                             "pages_downloaded": page_num,
                             "cursor": last_cursor,
-                            "associations_fetched": bool(
-                                associations_by_object.get(object_type)
-                            ),
+                            "associations_fetched": associations_fetched,
                             "minio_path": (
                                 f"s3://{destination.get('minio_bucket')}/{org_id}/{scan_id}/{object_type}/"
                                 if upload_to_minio

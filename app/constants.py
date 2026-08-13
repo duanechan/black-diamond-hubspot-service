@@ -63,4 +63,29 @@ SUPPORTED_OBJECTS: dict[str, dict] = {
         "supports_associations": True,
         "association_targets": ["contacts"],
     },
+    "owners": {
+        "label": "Owners",
+        "api_endpoint": "/crm/v3/owners",
+        # Owners have no properties model - the dedicated Owners API
+        # always returns the same fixed fields (email, firstName,
+        # lastName, userId, createdAt, updatedAt, archived), and
+        # doesn't support the Search API, incremental filtering, or
+        # associations.
+        "default_properties": [],
+        "supports_incremental": False,
+        "supports_associations": False,
+        "association_targets": [],
+    },
+    "engagements": {
+        "label": "Email Engagements",
+        "api_endpoint": "/engagements/v1/engagements/paged",
+        # Legacy v1 API - no properties model to request (fixed fields
+        # only) and no incremental filtering support. Associations
+        # (contacts/companies/deals) are always included inline by the
+        # API itself, not requested via association_targets.
+        "default_properties": [],
+        "supports_incremental": False,
+        "supports_associations": True,
+        "association_targets": [],
+    },
 }

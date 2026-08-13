@@ -11,7 +11,19 @@ class PIIService:
     usable as join/dedup keys downstream without exposing the real data.
     """
 
-    FIELDS = ["email", "firstname", "lastname", "phone"]
+    # Standard CRM objects (contacts, companies, deals, etc.) use
+    # lowercase property names (e.g. "firstname"). Owners and
+    # engagements are reshaped from APIs that return camelCase field
+    # names (e.g. "firstName") - both variants are listed so masking
+    # isn't silently bypassed by a casing difference between sources.
+    FIELDS = [
+        "email",
+        "firstname",
+        "firstName",
+        "lastname",
+        "lastName",
+        "phone",
+    ]
 
     def __init__(self, enabled: bool, hmac_key: str) -> None:
         """Initializes the PII masking service.
