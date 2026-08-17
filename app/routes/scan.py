@@ -44,8 +44,7 @@ scan_start_response = scan_ns.model(
 @scan_ns.route("/start")
 class Start(Resource):
     @scan_ns.expect(scan_start_request)
-    @scan_ns.marshal_with(scan_start_response)
-    @scan_ns.response(202, "Scan started")
+    @scan_ns.response(202, "Scan started", scan_start_response)
     @scan_ns.response(400, "Bad Request")
     @require_hmac()
     def post(self):
