@@ -6,7 +6,6 @@ from app.clients.hubspot_client import HubSpotClient
 from app.config import Settings, validate_settings
 from app.db import create_db_engine, create_session_factory
 from app.logger import logger, werkzeug_logger
-from app.models.base import Base
 from app.repositories.scan_repository import ScanRepository
 from app.routes.batch import batch_ns
 from app.routes.health import health_ns
@@ -56,7 +55,6 @@ def create_app(settings: Settings) -> Flask:
         password=settings.DB_PASSWORD.get_secret_value(),
         schema=settings.DB_SCHEMA,
     )
-    Base.metadata.create_all(engine)
 
     app.extensions["scans"] = ScanRepository(create_session_factory(engine))
     app.extensions["minio"] = MinioClient(
