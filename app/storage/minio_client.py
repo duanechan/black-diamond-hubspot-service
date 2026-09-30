@@ -123,7 +123,7 @@ class MinioClient:
             return None
         assert self._client is not None
 
-        object_key = f"{org_id}/{scan_id}/{object_type}/page_{page}.{output_format}"
+        object_key = f"{org_id}/{scan_id}/{object_type}/page_{page:03d}.{output_format}"
 
         try:
             self._client.put_object(

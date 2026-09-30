@@ -95,10 +95,10 @@ class TestUpload:
             output_format="parquet",
         )
 
-        assert key == "org1/scan1/contacts/page_3.parquet"
+        assert key == "org1/scan1/contacts/page_003.parquet"
         call_kwargs = mock_minio.put_object.call_args.kwargs
         assert call_kwargs["bucket_name"] == "my-bucket"
-        assert call_kwargs["object_name"] == "org1/scan1/contacts/page_3.parquet"
+        assert call_kwargs["object_name"] == "org1/scan1/contacts/page_003.parquet"
         assert call_kwargs["length"] == len(b"some-bytes")
 
     def test_raises_minio_client_error_on_failure(self):

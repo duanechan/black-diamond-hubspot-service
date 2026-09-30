@@ -22,7 +22,7 @@ class TestMinioIntegration:
             output_format="json",
         )
 
-        assert key == "test-org/test-scan/contacts/page_1.json"
+        assert key == "test-org/test-scan/contacts/page_001.json"
 
         raw = Minio(
             MINIO_ENDPOINT,
