@@ -44,7 +44,12 @@ class Health(Resource):
         is_minio_ok = minio.ping()
         is_kafka_ok = kafka.ping()
         is_clickhouse_ok = clickhouse.ping()
-        is_healthy = is_hubspot_ok and is_minio_ok and is_kafka_ok and is_clickhouse_ok
+        is_healthy = (
+            is_hubspot_ok
+            and is_kafka_ok
+            and (is_minio_ok or not minio.enabled)
+            and (is_clickhouse_ok or not clickhouse.enabled)
+        )
 
         return {
             "status": "healthy" if is_healthy else "degraded",
