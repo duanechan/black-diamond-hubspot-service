@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      # Only tests/unit runs here: those tests need no external services.
+      # tests/integration needs the docker-compose stack (Postgres, MinIO,
+      # Kafka, ClickHouse) and isn't wired into CI yet - see README.md.
+      - name: Run unit tests
+        run: uv run pytest tests/unit -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run ruff
+        run: uv run ruff check .
+
+  nomad-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nomad
+        uses: hashicorp/setup-nomad@main
+
+      - name: Validate job specs
+        run: |
+          for f in nomad/*/black-diamond-hubspot-service.hcl; do
+            echo "Validating $f"
+            nomad job validate "$f"
+          done
