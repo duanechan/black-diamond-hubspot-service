@@ -61,7 +61,8 @@ def make_paged_iterator(pages, fail_on_page=None):
     return _iter
 
 
-ONE_PAGE = lambda records: lambda *a, **kw: iter([(None, records)])
+def ONE_PAGE(records):
+    return lambda *a, **kw: iter([(None, records)])
 
 
 class TestValidateScanParams:
